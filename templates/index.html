@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Harry Potter y tu</title>
+</head>
+<body>
+
+  <h1>Harry Potter y tu</h1>
+
+  <!-- 3-step indicator -->
+  <nav>
+    <ol>
+      <li id="step-1" class="{{ 'active' if step == 1 else '' }}">Sube tu copia</li>
+      <li id="step-2" class="{{ 'active' if step == 2 else '' }}">Elige tus datos</li>
+      <li id="step-3" class="{{ 'active' if step == 3 else '' }}">Crear libro</li>
+    </ol>
+  </nav>
+
+  <hr>
+
+  <!-- Step 1: upload -->
+  <section id="section-step-1">
+    <h2>Paso 1: Sube tu copia de Google</h2>
+    <p>
+      Sube el archivo ZIP de tu Google Takeout. Puedes descargarlo desde
+      <a href="https://takeout.google.com/settings/takeout/custom/profile,my_activity" target="_blank">takeout.google.com</a>.
+    </p>
+
+    <form id="upload-form">
+      <label for="file-input">Selecciona el archivo ZIP:</label><br><br>
+      <input type="file" id="file-input" name="file" accept=".zip" required><br><br>
+      <button type="submit" id="upload-btn">Subir archivo</button>
+    </form>
+
+    <!-- Progress area (hidden until upload starts) -->
+    <div id="progress-area" style="display:none; margin-top: 1em;">
+      <p id="progress-label">Subiendo...</p>
+      <progress id="progress-bar" value="0" max="100" style="width: 100%; height: 1.5em;"></progress>
+      <p id="progress-percent">0%</p>
+    </div>
+
+    <!-- Result area (hidden until done) -->
+    <div id="result-area" style="display:none; margin-top: 1em;">
+      <p id="result-msg"></p>
+      <div id="services-list"></div>
+    </div>
+
+    <div id="error-area" style="display:none; margin-top: 1em;">
+      <p id="error-msg" style="color: red;"></p>
+    </div>
+  </section>
+
+  <script>
+    const form = document.getElementById('upload-form');
+    const fileInput = document.getElementById('file-input');
+    const uploadBtn = document.getElementById('upload-btn');
+    const progressArea = document.getElementById('progress-area');
+    const progressBar = document.getElementById('progress-bar');
+    const progressLabel = document.getElementById('progress-label');
+    const progressPercent = document.getElementById('progress-percent');
+    const resultArea = document.getElementById('result-area');
+    const resultMsg = document.getElementById('result-msg');
+    const servicesList = document.getElementById('services-list');
+    const errorArea = document.getElementById('error-area');
+    const errorMsg = document.getElementById('error-msg');
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      // Reset UI
+      errorArea.style.display = 'none';
+      resultArea.style.display = 'none';
+      progressArea.style.display = 'block';
+      uploadBtn.disabled = true;
+      progressBar.value = 0;
+      progressPercent.textContent = '0%';
+      progressLabel.textContent = 'Subiendo...';
+
+      const xhr = new XMLHttpRequest();
+
+      xhr.upload.addEventListener('progress', function (e) {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          progressBar.value = pct;
+          progressPercent.textContent = pct + '%';
+          if (pct === 100) {
+            progressLabel.textContent = 'Procesando archivo...';
+          }
+        }
+      });
+
+      xhr.addEventListener('load', function () {
+        uploadBtn.disabled = false;
+
+        if (xhr.status === 200) {
+          let data;
+          try {
+            data = JSON.parse(xhr.responseText);
+          } catch (err) {
+            showError('Error inesperado al procesar la respuesta del servidor.');
+            return;
+          }
+
+          progressArea.style.display = 'none';
+          resultArea.style.display = 'block';
+
+          const names = Object.keys(data.services);
+          resultMsg.textContent =
+            'Archivo procesado. Se encontraron ' + names.length +
+            ' servicios con un total de ' + data.total_items + ' elementos.';
+
+          // List detected services
+          let html = '<h3>Servicios encontrados:</h3><ul>';
+          for (const [name, count] of Object.entries(data.services)) {
+            html += '<li>' + escapeHtml(name) + ' — ' + count + ' elementos</li>';
+          }
+          html += '</ul>';
+
+          if (data.skipped_services && data.skipped_services.length > 0) {
+            html += '<h3>Servicios omitidos:</h3><ul>';
+            for (const name of data.skipped_services) {
+              html += '<li>' + escapeHtml(name) + '</li>';
+            }
+            html += '</ul>';
+          }
+
+          html += '<p><small>ID de sesión: ' + escapeHtml(data.session_id) + '</small></p>';
+          servicesList.innerHTML = html;
+        } else {
+          let errText = 'Error del servidor.';
+          try {
+            const errData = JSON.parse(xhr.responseText);
+            errText = errData.error || errText;
+          } catch (_) {}
+          progressArea.style.display = 'none';
+          showError(errText);
+        }
+      });
+
+      xhr.addEventListener('error', function () {
+        uploadBtn.disabled = false;
+        progressArea.style.display = 'none';
+        showError('Error de red al subir el archivo. Inténtalo de nuevo.');
+      });
+
+      xhr.open('POST', '/upload');
+      xhr.send(formData);
+    });
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorArea.style.display = 'block';
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+  </script>
+
+</body>
+</html>

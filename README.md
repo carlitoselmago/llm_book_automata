@@ -1,8 +1,18 @@
 # llm_book_automata
 Creates books using small LLM models thru LMstudio, publishes every book
 
-# Para crear API google docs
+## Pasos de procesamiento
 
-https://console.cloud.google.com/
+- User: sube su takeout
+- System: preprocesa takeout
+- User: desselecciona datos que no quiere que sean procesados
+- System: crea un json de los datos seleccionados finales
+- LLM : parsea una ficha de usuario con:
+    - Nombre apellidos
+    - Género
+    - Edad
+    - Lugar de nacimiento
+    - Intereses []
 
-n the console: IAM & Admin → Service Accounts → Create. Give it any name, then create a JSON key and download it. Rename it service_account.json
+
+## Modelos recomendados
