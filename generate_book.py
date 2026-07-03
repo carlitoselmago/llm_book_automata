@@ -48,10 +48,17 @@ def build_user_description(data: dict) -> str:
     return '\n'.join(lines)
 
 
-def stream_book(user_description: str, user_name: str) -> None:
+def iter_book_chunks(user_description: str, user_name: str):
+    """Yield successive text deltas from the LM Studio streaming completion.
+
+    Shared by the CLI (prints to terminal) and the Flask app (forwards each
+    chunk to the browser over SSE), so both stay in sync with the same prompt.
+    """
     prompt = (
         f"With this user information:\n\n{user_description}\n\n"
-        f"start writing a book called \"Harry Potter and {user_name}\"."
+        f"start writing a book called \"Harry Potter and {user_name}\". "
+        f"Start each new chapter on its own line with a markdown heading, "
+        f"e.g. \"## Chapter 1: Title\", so the structure is easy to follow."
     )
 
     payload = {
@@ -78,7 +85,12 @@ def stream_book(user_description: str, user_name: str) -> None:
             chunk = json.loads(data_str)
             content = chunk["choices"][0]["delta"].get("content")
             if content:
-                print(content, end='', flush=True)
+                yield content
+
+
+def stream_book(user_description: str, user_name: str) -> None:
+    for content in iter_book_chunks(user_description, user_name):
+        print(content, end='', flush=True)
     print()
 
 

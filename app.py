@@ -1,11 +1,15 @@
 import os
 import re
+import threading
+import time
 import uuid
 import zipfile
 import json
 from pathlib import Path
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 from werkzeug.utils import secure_filename
+
+from generate_book import build_user_description, iter_book_chunks
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -460,13 +464,173 @@ def _handle_upload():
         for name, info in data['services'].items()
     }
 
-    return jsonify({
+    resp = jsonify({
         'session_id': session_id,
         'services': services_summary,
         'skipped_services': data['skipped_services'],
         'total_items': sum(services_summary.values()),
     })
+    # Remembers which session this browser belongs to, so the book-writing
+    # area can resume after the tab is closed/reopened — no login involved.
+    resp.set_cookie(
+        BOOK_COOKIE, session_id,
+        max_age=BOOK_COOKIE_MAX_AGE, httponly=True, samesite='Lax',
+    )
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Book generation — runs in a background thread per session, independent of
+# any single HTTP request, so it keeps going after the browser disconnects.
+# Progress is kept in memory and mirrored to disk so a reconnecting client
+# (or a fresh request after a server restart) can see what was written.
+# ---------------------------------------------------------------------------
+
+BOOK_COOKIE = 'book_session'
+BOOK_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
+BOOK_POLL_INTERVAL = 0.3  # seconds between checks for new content in the SSE loop
+
+_book_lock = threading.Lock()
+_book_sessions: dict[str, dict] = {}  # session_id -> {'status', 'text', 'error'}
+
+
+def _book_file(session_id: str) -> Path:
+    return OUTPUT_FOLDER / f'{session_id}_book.txt'
+
+
+def _book_done_marker(session_id: str) -> Path:
+    return OUTPUT_FOLDER / f'{session_id}_book.done'
+
+
+def _load_book_state(session_id: str) -> dict:
+    """Get (or lazily rebuild from disk) the in-memory state for a session."""
+    with _book_lock:
+        state = _book_sessions.get(session_id)
+        if state is not None:
+            return state
+
+        book_path = _book_file(session_id)
+        if book_path.exists():
+            text = book_path.read_text(encoding='utf-8')
+            # A process restart loses the in-flight thread; if there's no
+            # "done" marker the generation was interrupted mid-way. We can't
+            # resume the LLM call itself, so we just surface what was saved.
+            status = 'done' if _book_done_marker(session_id).exists() else 'interrupted'
+            state = {'status': status, 'text': text, 'error': None}
+        else:
+            state = {'status': 'none', 'text': '', 'error': None}
+        _book_sessions[session_id] = state
+        return state
+
+
+def _append_book_text(session_id: str, state: dict, chunk: str) -> None:
+    with _book_lock:
+        state['text'] += chunk
+    with open(_book_file(session_id), 'a', encoding='utf-8') as f:
+        f.write(chunk)
+
+
+def _run_book_generation(session_id: str, state: dict, user_description: str, user_name: str) -> None:
+    try:
+        for chunk in iter_book_chunks(user_description, user_name):
+            _append_book_text(session_id, state, chunk)
+        with _book_lock:
+            state['status'] = 'done'
+        _book_done_marker(session_id).touch()
+    except Exception as e:
+        app.logger.exception('Book generation failed for session %s', session_id)
+        with _book_lock:
+            state['status'] = 'error'
+            state['error'] = str(e)
+
+
+def _ensure_book_started(session_id: str) -> dict:
+    """Return the session's state, starting the background writer if needed."""
+    state = _load_book_state(session_id)
+    with _book_lock:
+        should_start = state['status'] == 'none'
+        if should_start:
+            state['status'] = 'running'
+    if should_start:
+        data_path = OUTPUT_FOLDER / f'{session_id}.json'
+        data = json.loads(data_path.read_text(encoding='utf-8'))
+        user_name = data.get('profile', {}).get('name') or 'You'
+        user_description = build_user_description(data)
+        threading.Thread(
+            target=_run_book_generation,
+            args=(session_id, state, user_description, user_name),
+            daemon=True,
+        ).start()
+    return state
+
+
+@app.route('/generate/status')
+def generate_status():
+    session_id = request.cookies.get(BOOK_COOKIE)
+    if not session_id:
+        return jsonify({'has_session': False})
+
+    output_path = OUTPUT_FOLDER / f'{session_id}.json'
+    if not output_path.exists():
+        return jsonify({'has_session': False})
+
+    data = json.loads(output_path.read_text(encoding='utf-8'))
+    services_summary = {name: info['count'] for name, info in data['services'].items()}
+    state = _load_book_state(session_id)
+
+    return jsonify({
+        'has_session': True,
+        'session_id': session_id,
+        'book_status': state['status'],
+        'services': services_summary,
+        'skipped_services': data.get('skipped_services', []),
+        'total_items': sum(services_summary.values()),
+    })
+
+
+@app.route('/generate/stream')
+def generate_stream():
+    session_id = request.cookies.get(BOOK_COOKIE)
+    if not session_id:
+        return jsonify({'error': 'No hay una sesión activa.'}), 400
+
+    if not (OUTPUT_FOLDER / f'{session_id}.json').exists():
+        return jsonify({'error': 'Sesión no encontrada.'}), 404
+
+    state = _ensure_book_started(session_id)
+
+    def event_stream():
+        yield ': connected\n\n'  # flushes headers immediately, before any content exists
+        with _book_lock:
+            sent = state['text']
+        if sent:
+            yield f'data: {json.dumps({"content": sent}, ensure_ascii=False)}\n\n'
+
+        while True:
+            with _book_lock:
+                status = state['status']
+                full_text = state['text']
+                error = state['error']
+            if len(full_text) > len(sent):
+                new_part = full_text[len(sent):]
+                sent = full_text
+                yield f'data: {json.dumps({"content": new_part}, ensure_ascii=False)}\n\n'
+            if status in ('done', 'error', 'interrupted'):
+                if status == 'error':
+                    yield f'data: {json.dumps({"error": error or "Error desconocido"})}\n\n'
+                break
+            time.sleep(BOOK_POLL_INTERVAL)
+        yield 'event: done\ndata: {}\n\n'
+
+    return Response(
+        event_stream(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, use_reloader=False)
+    app.run(debug=True, port=5000, use_reloader=False, threaded=True)
