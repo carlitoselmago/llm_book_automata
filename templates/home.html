@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Harry Potter y tú</title>
+
+  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/general.less') }}">
+  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/home.less') }}">
+  <script>
+    less = { env: 'development' };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/less@4"></script>
+</head>
+<body>
+
+  <h1>Harry Potter y tú</h1>
+
+  <p>
+    <a href="/crear" id="new-book-btn">Harry potter y tú (+)</a>
+  </p>
+
+  <hr>
+
+  <h2>Biblioteca</h2>
+
+  {% if library %}
+    <div id="library-list">
+      {% for book in library %}
+        <div class="library-item">
+          <a href="{{ url_for('library_pdf', session_id=book.id) }}">
+            <img src="{{ url_for('library_cover', session_id=book.id) }}" alt="{{ book.title }}" width="150">
+          </a>
+          <p>{{ book.title }}</p>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p>Todavía no hay libros en la colección.</p>
+  {% endif %}
+
+  <footer id="site-footer">
+    <a href="{{ url_for('privacidad') }}">Protección de datos</a>
+  </footer>
+
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="{{ url_for('static', filename='js/general.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/home.js') }}"></script>
+
+</body>
+</html>

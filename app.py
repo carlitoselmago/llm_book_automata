@@ -5,10 +5,12 @@ import time
 import uuid
 import zipfile
 import json
+from datetime import datetime, timezone
 from pathlib import Path
-from flask import Flask, render_template, request, jsonify, Response
+from flask import Flask, render_template, request, jsonify, Response, send_file
 from werkzeug.utils import secure_filename
 
+import book_builder
 from generate_book import build_user_description, iter_book_chunks
 
 app = Flask(__name__)
@@ -420,8 +422,19 @@ def process_takeout_zip(zip_path: Path, session_id: str) -> dict:
 
 
 @app.route('/')
-def index():
+def home():
+    library = list(reversed(_load_library()))
+    return render_template('home.html', library=library)
+
+
+@app.route('/crear')
+def crear():
     return render_template('index.html', step=1)
+
+
+@app.route('/privacidad')
+def privacidad():
+    return render_template('privacidad.html')
 
 
 @app.route('/upload', methods=['POST'])
@@ -629,6 +642,125 @@ def generate_stream():
             'Cache-Control': 'no-cache',
             'X-Accel-Buffering': 'no',
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Finished-book artifacts (cover + PDF) and the public library.
+# ---------------------------------------------------------------------------
+
+LIBRARY_PATH = OUTPUT_FOLDER / 'library.json'
+_library_lock = threading.Lock()
+
+
+def _cover_path(session_id: str) -> Path:
+    return OUTPUT_FOLDER / f'{session_id}_cover.png'
+
+
+def _pdf_path(session_id: str) -> Path:
+    return OUTPUT_FOLDER / f'{session_id}_book.pdf'
+
+
+def _load_library() -> list[dict]:
+    if not LIBRARY_PATH.exists():
+        return []
+    return json.loads(LIBRARY_PATH.read_text(encoding='utf-8'))
+
+
+def _save_library(entries: list[dict]) -> None:
+    LIBRARY_PATH.write_text(json.dumps(entries, ensure_ascii=False, indent=2))
+
+
+def _session_user_name(session_id: str) -> str:
+    data = json.loads((OUTPUT_FOLDER / f'{session_id}.json').read_text(encoding='utf-8'))
+    return data.get('profile', {}).get('name') or 'You'
+
+
+def _ensure_book_artifacts(session_id: str, user_name: str) -> tuple[Path, Path]:
+    """Build (once) the cover PNG and PDF for a finished session."""
+    cover_path = _cover_path(session_id)
+    pdf_path = _pdf_path(session_id)
+    if not cover_path.exists():
+        book_builder.build_cover_image(user_name, cover_path)
+    if not pdf_path.exists():
+        state = _load_book_state(session_id)
+        with _book_lock:
+            book_text = state['text']
+        book_builder.build_pdf(user_name, book_text, cover_path, pdf_path)
+    return cover_path, pdf_path
+
+
+def _require_finished_session():
+    """Shared guard for the download/add-to-library routes.
+
+    Returns (session_id, user_name, None) on success, or
+    (None, None, <flask error response>) on failure.
+    """
+    session_id = request.cookies.get(BOOK_COOKIE)
+    if not session_id:
+        return None, None, (jsonify({'error': 'No hay una sesión activa.'}), 400)
+    if not (OUTPUT_FOLDER / f'{session_id}.json').exists():
+        return None, None, (jsonify({'error': 'Sesión no encontrada.'}), 404)
+    state = _load_book_state(session_id)
+    if state['status'] != 'done':
+        return None, None, (jsonify({'error': 'El libro todavía se está escribiendo.'}), 409)
+    return session_id, _session_user_name(session_id), None
+
+
+@app.route('/book/download')
+def book_download():
+    session_id, user_name, error = _require_finished_session()
+    if error:
+        return error
+
+    _, pdf_path = _ensure_book_artifacts(session_id, user_name)
+    return send_file(
+        pdf_path, mimetype='application/pdf', as_attachment=True,
+        download_name=f'Harry Potter y {user_name}.pdf',
+    )
+
+
+@app.route('/library/add', methods=['POST'])
+def library_add():
+    session_id, user_name, error = _require_finished_session()
+    if error:
+        return error
+
+    _ensure_book_artifacts(session_id, user_name)
+
+    with _library_lock:
+        entries = _load_library()
+        if not any(e['id'] == session_id for e in entries):
+            entries.append({
+                'id': session_id,
+                'title': f'Harry Potter y {user_name}',
+                'user_name': user_name,
+                'created_at': datetime.now(timezone.utc).isoformat(),
+            })
+            _save_library(entries)
+
+    return jsonify({'ok': True})
+
+
+@app.route('/library/<session_id>/cover')
+def library_cover(session_id):
+    cover_path = _cover_path(session_id)
+    if not cover_path.exists():
+        return jsonify({'error': 'No encontrado.'}), 404
+    return send_file(cover_path, mimetype='image/png')
+
+
+@app.route('/library/<session_id>/pdf')
+def library_pdf(session_id):
+    pdf_path = _pdf_path(session_id)
+    if not pdf_path.exists():
+        return jsonify({'error': 'No encontrado.'}), 404
+    entries = _load_library()
+    entry = next((e for e in entries if e['id'] == session_id), None)
+    title = entry['title'] if entry else 'libro'
+    return send_file(
+        pdf_path, mimetype='application/pdf', as_attachment=True,
+        download_name=f'{title}.pdf',
     )
 
 

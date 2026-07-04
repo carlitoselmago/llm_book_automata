@@ -4,10 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Harry Potter y tu</title>
+
+  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/general.less') }}">
+  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/index.less') }}">
+  <script>
+    less = { env: 'development' };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/less@4"></script>
 </head>
 <body>
 
   <h1>Harry Potter y tu</h1>
+
+  <p><a href="/">&larr; Volver al inicio</a></p>
 
   <!-- 3-step indicator -->
   <nav>
@@ -68,283 +77,26 @@
     </div>
   </section>
 
-  <script>
-    const form = document.getElementById('upload-form');
-    const fileInput = document.getElementById('file-input');
-    const uploadBtn = document.getElementById('upload-btn');
-    const progressArea = document.getElementById('progress-area');
-    const progressBar = document.getElementById('progress-bar');
-    const progressLabel = document.getElementById('progress-label');
-    const progressPercent = document.getElementById('progress-percent');
-    const resultArea = document.getElementById('result-area');
-    const resultMsg = document.getElementById('result-msg');
-    const servicesList = document.getElementById('services-list');
-    const errorArea = document.getElementById('error-area');
-    const errorMsg = document.getElementById('error-msg');
-    const generateBtn = document.getElementById('generate-btn');
-    const bookArea = document.getElementById('book-area');
-    const bookContent = document.getElementById('book-content');
-    const tocList = document.getElementById('book-toc-list');
+  <!-- Shown once the book finishes writing. Plain div for now — styling
+       (overlay/positioning) is handled separately. -->
+  <div id="book-modal" style="display:none;">
+    <div id="book-modal-content">
+      <p>¡Tu libro está listo!</p>
+      <button type="button" id="modal-download-btn">Descargar el libro</button>
+      <button type="button" id="modal-add-btn">Añadir a la colección</button>
+      <p id="modal-add-msg" style="display:none;"></p>
+      <button type="button" id="modal-goto-home-btn" style="display:none;">Ir a la biblioteca</button>
+    </div>
+  </div>
 
-    let currentSessionId = null;
+  <footer id="site-footer">
+    <a href="{{ url_for('privacidad') }}">Protección de datos</a>
+  </footer>
 
-    form.addEventListener('submit', function (e) {
-      e.preventDefault();
-
-      const file = fileInput.files[0];
-      if (!file) return;
-
-      const formData = new FormData();
-      formData.append('file', file);
-
-      // Reset UI
-      errorArea.style.display = 'none';
-      resultArea.style.display = 'none';
-      progressArea.style.display = 'block';
-      uploadBtn.disabled = true;
-      progressBar.value = 0;
-      progressPercent.textContent = '0%';
-      progressLabel.textContent = 'Subiendo...';
-
-      const xhr = new XMLHttpRequest();
-
-      xhr.upload.addEventListener('progress', function (e) {
-        if (e.lengthComputable) {
-          const pct = Math.round((e.loaded / e.total) * 100);
-          progressBar.value = pct;
-          progressPercent.textContent = pct + '%';
-          if (pct === 100) {
-            progressLabel.textContent = 'Procesando archivo...';
-          }
-        }
-      });
-
-      xhr.addEventListener('load', function () {
-        uploadBtn.disabled = false;
-
-        if (xhr.status === 200) {
-          let data;
-          try {
-            data = JSON.parse(xhr.responseText);
-          } catch (err) {
-            showError('Error inesperado al procesar la respuesta del servidor.');
-            return;
-          }
-
-          progressArea.style.display = 'none';
-          renderUploadResult(data);
-        } else {
-          let errText = 'Error del servidor.';
-          try {
-            const errData = JSON.parse(xhr.responseText);
-            errText = errData.error || errText;
-          } catch (_) {}
-          progressArea.style.display = 'none';
-          showError(errText);
-        }
-      });
-
-      xhr.addEventListener('error', function () {
-        uploadBtn.disabled = false;
-        progressArea.style.display = 'none';
-        showError('Error de red al subir el archivo. Inténtalo de nuevo.');
-      });
-
-      xhr.open('POST', '/upload');
-      xhr.send(formData);
-    });
-
-    function showError(msg) {
-      errorMsg.textContent = msg;
-      errorArea.style.display = 'block';
-    }
-
-    function escapeHtml(str) {
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
-
-    function renderUploadResult(data) {
-      resultArea.style.display = 'block';
-
-      const names = Object.keys(data.services);
-      resultMsg.textContent =
-        'Archivo procesado. Se encontraron ' + names.length +
-        ' servicios con un total de ' + data.total_items + ' elementos.';
-
-      let html = '<h3>Servicios encontrados:</h3><ul>';
-      for (const [name, count] of Object.entries(data.services)) {
-        html += '<li>' + escapeHtml(name) + ' — ' + count + ' elementos</li>';
-      }
-      html += '</ul>';
-
-      if (data.skipped_services && data.skipped_services.length > 0) {
-        html += '<h3>Servicios omitidos:</h3><ul>';
-        for (const name of data.skipped_services) {
-          html += '<li>' + escapeHtml(name) + '</li>';
-        }
-        html += '</ul>';
-      }
-
-      html += '<p><small>ID de sesión: ' + escapeHtml(data.session_id) + '</small></p>';
-      servicesList.innerHTML = html;
-
-      currentSessionId = data.session_id;
-      generateBtn.style.display = 'inline-block';
-    }
-
-    // --- Book writing area -------------------------------------------------
-    // Streams the LLM output into #book-content as it arrives (system-only,
-    // read-only "shared doc" feel). Markdown-style "#" lines become headings
-    // and are mirrored as clickable links in the #book-toc-list index.
-    //
-    // Generation runs server-side in a background thread tied to a cookie
-    // (no login), so it keeps writing even if this tab is closed. Reopening
-    // the page reconnects to /generate/stream, which replays everything
-    // written so far before continuing live.
-
-    generateBtn.addEventListener('click', function () {
-      if (!currentSessionId) return;
-
-      generateBtn.disabled = true;
-      bookArea.style.display = 'block';
-      bookContent.innerHTML = '';
-      tocList.innerHTML = '';
-      bookArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-      streamBook();
-    });
-
-    // On load, check whether this browser (via cookie) already has a
-    // session — resume showing/streaming the book if one is in progress.
-    window.addEventListener('DOMContentLoaded', function () {
-      fetch('/generate/status')
-        .then(function (res) { return res.json(); })
-        .then(function (data) {
-          if (!data.has_session) return;
-
-          renderUploadResult(data);
-
-          if (data.book_status && data.book_status !== 'none') {
-            generateBtn.disabled = true;
-            bookArea.style.display = 'block';
-            bookContent.innerHTML = '';
-            tocList.innerHTML = '';
-            streamBook();
-          }
-        })
-        .catch(function () { /* no previous session — normal first visit */ });
-    });
-
-    function streamBook() {
-      let lineBuffer = '';
-      let currentParagraph = null;
-      let liveLineEl = null;
-      let headerCount = 0;
-
-      const source = new EventSource('/generate/stream');
-
-      source.addEventListener('message', function (e) {
-        let payload;
-        try {
-          payload = JSON.parse(e.data);
-        } catch (err) {
-          return;
-        }
-        if (payload.error) {
-          showError('Error generando el libro: ' + payload.error);
-          return;
-        }
-        if (payload.content) {
-          ingestChunk(payload.content);
-        }
-      });
-
-      source.addEventListener('done', function () {
-        source.close();
-        generateBtn.disabled = false;
-      });
-
-      source.addEventListener('error', function () {
-        source.close();
-        generateBtn.disabled = false;
-      });
-
-      function ingestChunk(text) {
-        lineBuffer += text;
-        let idx;
-        while ((idx = lineBuffer.indexOf('\n')) !== -1) {
-          const line = lineBuffer.slice(0, idx);
-          lineBuffer = lineBuffer.slice(idx + 1);
-          finalizeLine(line);
-        }
-        updateLiveLine(lineBuffer);
-      }
-
-      function finalizeLine(line) {
-        if (liveLineEl) {
-          liveLineEl.remove();
-          liveLineEl = null;
-        }
-
-        const trimmed = line.trim();
-        const headingMatch = trimmed.match(/^(#{1,6})\s*(.+)$/);
-
-        if (headingMatch) {
-          const title = headingMatch[2].trim();
-          if (title) {
-            headerCount += 1;
-            const id = 'chapter-' + headerCount;
-
-            const heading = document.createElement('h3');
-            heading.id = id;
-            heading.textContent = title;
-            bookContent.appendChild(heading);
-
-            const li = document.createElement('li');
-            const link = document.createElement('a');
-            link.href = '#' + id;
-            link.textContent = title;
-            link.addEventListener('click', function (ev) {
-              ev.preventDefault();
-              heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            });
-            li.appendChild(link);
-            tocList.appendChild(li);
-          }
-          currentParagraph = null;
-        } else if (trimmed === '') {
-          currentParagraph = null;
-        } else {
-          if (!currentParagraph) {
-            currentParagraph = document.createElement('p');
-            bookContent.appendChild(currentParagraph);
-          }
-          currentParagraph.textContent =
-            (currentParagraph.textContent ? currentParagraph.textContent + ' ' : '') + line;
-        }
-      }
-
-      function updateLiveLine(text) {
-        if (!text) {
-          if (liveLineEl) {
-            liveLineEl.remove();
-            liveLineEl = null;
-          }
-          return;
-        }
-        if (!liveLineEl) {
-          liveLineEl = document.createElement('p');
-          liveLineEl.className = 'live-line';
-          bookContent.appendChild(liveLineEl);
-        }
-        liveLineEl.textContent = text;
-      }
-    }
-  </script>
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="{{ url_for('static', filename='js/general.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/index.js') }}"></script>
 
 </body>
 </html>
+

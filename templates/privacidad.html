@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Protección de datos — Harry Potter y tú</title>
+
+  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/general.less') }}">
+  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/privacidad.less') }}">
+  <script>
+    less = { env: 'development' };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/less@4"></script>
+</head>
+<body>
+
+  <h1>Protección de datos</h1>
+
+  <p><a href="/">&larr; Volver al inicio</a></p>
+
+  <section id="privacidad-content">
+    <p>
+      Esta página explica qué datos se usan para generar tu libro y cómo se tratan.
+    </p>
+
+    <h2>Qué datos se usan</h2>
+    <p>
+      Para escribir tu libro se procesa el archivo de Google Takeout que subes
+      voluntariamente (perfil y actividad de los servicios que elijas). Estos
+      datos se usan únicamente para generar el texto del libro.
+    </p>
+
+    <h2>Dónde se guardan</h2>
+    <p>
+      Los datos procesados y el libro generado se almacenan en el servidor
+      mientras dura tu sesión y, si decides añadir el libro a la colección
+      pública, el libro (portada y PDF) queda visible para cualquier
+      visitante de la biblioteca.
+    </p>
+
+    <h2>Contacto</h2>
+    <p>
+      Si tienes dudas sobre tus datos o quieres solicitar su eliminación,
+      contacta con el responsable del sitio.
+    </p>
+  </section>
+
+  <footer id="site-footer">
+    <a href="{{ url_for('privacidad') }}">Protección de datos</a>
+  </footer>
+
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="{{ url_for('static', filename='js/general.js') }}"></script>
+
+</body>
+</html>

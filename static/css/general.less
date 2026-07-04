@@ -1,0 +1,49 @@
+// Shared variables and base styles for the whole site.
+// Loaded on every page before the page-specific .less file.
+
+@color-bg: #ffffff;
+@color-text: #1a1a1a;
+@color-primary: #7b2cbf;
+@color-primary-dark: #5a189a;
+@color-muted: #666666;
+@color-border: #dddddd;
+
+@font-body: Georgia, 'Times New Roman', serif;
+@font-heading: Georgia, 'Times New Roman', serif;
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: @color-bg;
+  color: @color-text;
+  font-family: @font-body;
+}
+
+h1, h2, h3 {
+  font-family: @font-heading;
+}
+
+a {
+  color: @color-primary;
+
+  &:hover {
+    color: @color-primary-dark;
+  }
+}
+
+button {
+  font-family: @font-body;
+  cursor: pointer;
+}
+
+#site-footer {
+  margin-top: 3em;
+  padding: 1em 0;
+  border-top: 1px solid @color-border;
+  color: @color-muted;
+  font-size: 0.9em;
+}

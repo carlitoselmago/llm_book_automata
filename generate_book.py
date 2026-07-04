@@ -22,7 +22,7 @@ BASE_DIR = Path(__file__).parent
 OUTPUT_FOLDER = BASE_DIR / 'outputs'
 
 LM_STUDIO_BASE_URL = "http://127.0.0.1:1234"
-MODEL_NAME = "mistralai/ministral-3-3b"  # change to switch models
+MODEL_NAME = "liquid/lfm2.5-1.2b"#"mistralai/ministral-3-3b"  # change to switch models
 
 
 def build_user_description(data: dict) -> str:
