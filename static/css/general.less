@@ -1,8 +1,8 @@
 // Shared variables and base styles for the whole site.
 // Loaded on every page before the page-specific .less file.
 
-@color-bg: #ffffff;
-@color-text: #1a1a1a;
+@color-bg: black;
+@color-text: white;
 @color-primary: #7b2cbf;
 @color-primary-dark: #5a189a;
 @color-muted: #666666;
@@ -21,11 +21,18 @@ html, body {
   background: @color-bg;
   color: @color-text;
   font-family: @font-body;
+  text-align: center;
 }
-
+body{
+  background-image: url(../img/space.gif);
+  min-height: 100vh;
+  padding: 40px;
+}
 h1, h2, h3 {
   font-family: @font-heading;
+  margin:0px;
 }
+
 
 a {
   color: @color-primary;
@@ -38,6 +45,16 @@ a {
 button {
   font-family: @font-body;
   cursor: pointer;
+}
+
+#logo{
+  width: 60vw;
+  text-align: center;
+  margin: auto;
+  img{
+    width: 100%;
+    height: auto;
+  }
 }
 
 #site-footer {
