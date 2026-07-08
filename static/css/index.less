@@ -9,6 +9,14 @@
 #book-toc {
   width: 220px;
   flex-shrink: 0;
+  text-align: left;
+
+  ul{
+    padding-left: 10px;
+    li{
+      margin-bottom: 5px;
+    }
+  }
 }
 
 .live-line {
@@ -19,4 +27,44 @@
   #book-modal-content {
   
   }
+}
+
+.nav_pasos{
+  background-color:blueviolet;
+  padding: 1px;
+}
+
+ol{
+  display: flex;
+  padding: 0px;
+  gap:10px;
+ justify-content: space-evenly;
+  li{
+    list-style: none;
+    padding: 0px;
+        border: line;
+        padding: 5px 50px;
+        &.active{
+          border:double;
+        }
+  }
+}
+
+section{
+  display: none;
+  padding: 40px;
+
+  &.active{
+    display: block;
+  }
+}
+
+
+#book-content{
+  background-color: beige;
+  padding: 20px 60px;
+  max-height: 70vh;
+  overflow-y: scroll;
+  color:black;
+      width: 100%;
 }

@@ -1,24 +1,6 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Harry Potter y tú</title>
+ {% include 'chunks/header.html' %}
+  
 
-  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/general.less') }}">
-  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/home.less') }}">
-  <script>
-    less = { env: 'development' };
-  </script>
-  <script src="https://cdn.jsdelivr.net/npm/less@4"></script>
-</head>
-<body>
-
-  <h1 id="logo"><img src="{{ url_for('static', filename='img/logo.png') }}" alt="Harry Potter y tu"></h1>
-
-  <p>
-    <a href="/crear" id="new-book-btn">Harry potter y tú (+)</a>
-  </p>
 
   <hr>
 
@@ -38,14 +20,8 @@
   {% else %}
     <p>Todavía no hay libros en la colección.</p>
   {% endif %}
+  <p>
+    <a class="btn" href="/crear" id="new-book-btn">Crear tu aventura</a>
+  </p>
 
-  <footer id="site-footer">
-    <a href="{{ url_for('privacidad') }}">Protección de datos</a>
-  </footer>
-
-  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-  <script src="{{ url_for('static', filename='js/general.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/home.js') }}"></script>
-
-</body>
-</html>
+   {% include 'chunks/footer.html' %}

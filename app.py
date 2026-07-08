@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response, send_file
 from werkzeug.utils import secure_filename
+from livereload import Server
 
 import book_builder
 from generate_book import build_user_description, iter_book_chunks
@@ -16,6 +17,8 @@ from generate_book import build_user_description, iter_book_chunks
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max
+
+
 
 BASE_DIR = Path(__file__).parent
 UPLOAD_FOLDER = BASE_DIR / 'uploads'
@@ -567,6 +570,15 @@ def _ensure_book_started(session_id: str) -> dict:
     if should_start:
         data_path = OUTPUT_FOLDER / f'{session_id}.json'
         data = json.loads(data_path.read_text(encoding='utf-8'))
+        disabled_services = set(data.get('disabled_services', []))
+        if disabled_services:
+            data = {
+                **data,
+                'services': {
+                    name: info for name, info in data['services'].items()
+                    if name not in disabled_services
+                },
+            }
         user_name = data.get('profile', {}).get('name') or 'You'
         user_description = build_user_description(data)
         threading.Thread(
@@ -575,6 +587,36 @@ def _ensure_book_started(session_id: str) -> dict:
             daemon=True,
         ).start()
     return state
+
+
+@app.route('/generate/configure', methods=['POST'])
+def generate_configure():
+    """Let the user disable specific services before generation starts."""
+    session_id = request.cookies.get(BOOK_COOKIE)
+    if not session_id:
+        return jsonify({'error': 'No hay una sesión activa.'}), 400
+
+    output_path = OUTPUT_FOLDER / f'{session_id}.json'
+    if not output_path.exists():
+        return jsonify({'error': 'Sesión no encontrada.'}), 404
+
+    state = _load_book_state(session_id)
+    if state['status'] != 'none':
+        return jsonify({'error': 'La generación ya ha comenzado.'}), 409
+
+    payload = request.get_json(silent=True) or {}
+    disabled_services = payload.get('disabled_services', [])
+    if not isinstance(disabled_services, list):
+        return jsonify({'error': 'Formato inválido.'}), 400
+
+    data = json.loads(output_path.read_text(encoding='utf-8'))
+    data['disabled_services'] = [
+        name for name in disabled_services
+        if isinstance(name, str) and name in data.get('services', {})
+    ]
+    output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+    return jsonify({'ok': True})
 
 
 @app.route('/generate/status')
@@ -597,6 +639,7 @@ def generate_status():
         'book_status': state['status'],
         'services': services_summary,
         'skipped_services': data.get('skipped_services', []),
+        'disabled_services': data.get('disabled_services', []),
         'total_items': sum(services_summary.values()),
     })
 
@@ -742,6 +785,41 @@ def library_add():
     return jsonify({'ok': True})
 
 
+@app.route('/session/reset', methods=['POST'])
+def session_reset():
+    """Clear the current book session so the browser can start a new adventure.
+
+    Only removes what isn't needed anymore: the raw session data plus any
+    book artifacts that were never saved to the library. Anything already
+    added to the library (cover/PDF + its library.json entry) is untouched.
+    """
+    session_id = request.cookies.get(BOOK_COOKIE)
+    if session_id:
+        state = _load_book_state(session_id)
+        if state['status'] == 'running':
+            return jsonify({'error': 'El libro todavía se está escribiendo.'}), 409
+
+        with _book_lock:
+            _book_sessions.pop(session_id, None)
+
+        in_library = any(e['id'] == session_id for e in _load_library())
+
+        for path in (
+            OUTPUT_FOLDER / f'{session_id}.json',
+            _book_file(session_id),
+            _book_done_marker(session_id),
+        ):
+            path.unlink(missing_ok=True)
+
+        if not in_library:
+            _cover_path(session_id).unlink(missing_ok=True)
+            _pdf_path(session_id).unlink(missing_ok=True)
+
+    resp = jsonify({'ok': True})
+    resp.delete_cookie(BOOK_COOKIE)
+    return resp
+
+
 @app.route('/library/<session_id>/cover')
 def library_cover(session_id):
     cover_path = _cover_path(session_id)
@@ -765,4 +843,9 @@ def library_pdf(session_id):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, use_reloader=False, threaded=True)
+    server = Server(app.wsgi_app)
+    server.watch('static/**/*.less')
+    server.watch('static/**/*.js')
+    server.watch('templates/*-html')
+    server.serve(debug=True, port=5000)
+    #app.run(debug=True, port=5000, use_reloader=False, threaded=True)

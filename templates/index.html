@@ -1,25 +1,7 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Harry Potter y tu</title>
+ {% include 'chunks/header.html' %}
 
-  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/general.less') }}">
-  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/index.less') }}">
-  <script>
-    less = { env: 'development' };
-  </script>
-  <script src="https://cdn.jsdelivr.net/npm/less@4"></script>
-</head>
-<body>
-
-  <h1 id="logo"><img src="{{ url_for('static', filename='img/logo.png') }}" alt="Harry Potter y tu"></h1>
-
-  <p><a href="/">&larr; Volver al inicio</a></p>
-
-  <!-- 3-step indicator -->
-  <nav>
+  
+<nav class="nav_pasos">
     <ol>
       <li id="step-1" class="{{ 'active' if step == 1 else '' }}">Sube tu copia</li>
       <li id="step-2" class="{{ 'active' if step == 2 else '' }}">Elige tus datos</li>
@@ -27,14 +9,13 @@
     </ol>
   </nav>
 
-  <hr>
 
   <!-- Step 1: upload -->
-  <section id="section-step-1">
+  <section id="section-step-1" class="{{ 'active' if step == 1 else '' }}">
     <h2>Paso 1: Sube tu copia de Google</h2>
     <p>
       Sube el archivo ZIP de tu Google Takeout. Puedes descargarlo desde
-      <a href="https://takeout.google.com/settings/takeout/custom/profile,my_activity" target="_blank">takeout.google.com</a>.
+      <a class="" href="https://takeout.google.com/settings/takeout/custom/profile,my_activity" target="_blank">takeout.google.com</a>.
     </p>
 
     <form id="upload-form">
@@ -50,26 +31,27 @@
       <p id="progress-percent">0%</p>
     </div>
 
-    <!-- Result area (hidden until done) -->
-    <div id="result-area" style="display:none; margin-top: 1em;">
-      <p id="result-msg"></p>
-      <div id="services-list"></div>
-      <button type="button" id="generate-btn">Generar libro</button>
-    </div>
-
     <div id="error-area" style="display:none; margin-top: 1em;">
       <p id="error-msg" style="color: red;"></p>
     </div>
   </section>
 
-  <hr>
 
-  <!-- Book writing area: streams the LLM output live, like a shared doc.
+  <!-- Step 2: pick which service data to include -->
+  <section id="section-step-2" class="{{ 'active' if step == 2 else '' }}">
+    <h2>Paso 2: Elige tus datos</h2>
+    <p id="result-msg"></p>
+    <div id="services-list"></div>
+    <button type="button" id="generate-btn">Generar libro</button>
+  </section>
+
+
+  <!-- Step 3: streams the LLM output live, like a shared doc.
        The user never types here — only the system writes. -->
-  <section id="book-area" style="display:none; margin-top: 2em;">
+  <section id="section-step-3" class="{{ 'active' if step == 3 else '' }}">
     <h2>Escribiendo tu libro...</h2>
-    <div id="book-writer" style="display:flex; align-items:flex-start; gap:1em;">
-      <nav id="book-toc" style="width:220px; flex-shrink:0;">
+    <div id="book-writer">
+      <nav id="book-toc">
         <strong>Índice</strong>
         <ul id="book-toc-list"></ul>
       </nav>
@@ -86,17 +68,11 @@
       <button type="button" id="modal-add-btn">Añadir a la colección</button>
       <p id="modal-add-msg" style="display:none;"></p>
       <button type="button" id="modal-goto-home-btn" style="display:none;">Ir a la biblioteca</button>
+      <button type="button" id="modal-new-adventure-btn">Crear una nueva aventura</button>
     </div>
   </div>
 
-  <footer id="site-footer">
-    <a href="{{ url_for('privacidad') }}">Protección de datos</a>
-  </footer>
+   {% include 'chunks/footer.html' %}
 
-  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-  <script src="{{ url_for('static', filename='js/general.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/index.js') }}"></script>
 
-</body>
-</html>
 

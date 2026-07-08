@@ -9,13 +9,12 @@ $(function () {
   const $progressBar = $('#progress-bar');
   const $progressLabel = $('#progress-label');
   const $progressPercent = $('#progress-percent');
-  const $resultArea = $('#result-area');
   const $resultMsg = $('#result-msg');
   const $servicesList = $('#services-list');
   const $errorArea = $('#error-area');
   const $errorMsg = $('#error-msg');
   const $generateBtn = $('#generate-btn');
-  const $bookArea = $('#book-area');
+  const $bookArea = $('#section-step-3');
   const $bookContent = $('#book-content');
   const $tocList = $('#book-toc-list');
   const $bookModal = $('#book-modal');
@@ -23,8 +22,18 @@ $(function () {
   const $modalAddBtn = $('#modal-add-btn');
   const $modalAddMsg = $('#modal-add-msg');
   const $modalGotoHomeBtn = $('#modal-goto-home-btn');
+  const $modalNewAdventureBtn = $('#modal-new-adventure-btn');
 
   let currentSessionId = null;
+
+  // Switches the nav item and the matching <section> to "active" (styled/
+  // shown in index.less), so only one step is visible at a time.
+  function setStep(n) {
+    $('nav > ol > li').removeClass('active');
+    $('#step-' + n).addClass('active');
+    $('section').removeClass('active');
+    $('#section-step-' + n).addClass('active');
+  }
 
   $form.on('submit', function (e) {
     e.preventDefault();
@@ -37,7 +46,6 @@ $(function () {
 
     // Reset UI
     $errorArea.hide();
-    $resultArea.hide();
     $progressArea.show();
     $uploadBtn.prop('disabled', true);
     $progressBar.val(0);
@@ -88,7 +96,7 @@ $(function () {
   }
 
   function renderUploadResult(data) {
-    $resultArea.show();
+    currentSessionId = data.session_id || currentSessionId;
 
     const names = Object.keys(data.services);
     $resultMsg.text(
@@ -96,9 +104,15 @@ $(function () {
       ' servicios con un total de ' + data.total_items + ' elementos.'
     );
 
-    let html = '<h3>Servicios encontrados:</h3><ul>';
+    // Previously-disabled services (e.g. when resuming a session) start unchecked.
+    const disabledSet = new Set(data.disabled_services || []);
+
+    let html = '<h3>Servicios encontrados:</h3><p><small>Desmarca los que no quieras incluir en tu libro.</small></p><ul id="services-checklist">';
     for (const [name, count] of Object.entries(data.services)) {
-      html += '<li>' + escapeHtml(name) + ' — ' + count + ' elementos</li>';
+      const checked = disabledSet.has(name) ? '' : 'checked';
+      html += '<li><label><input type="checkbox" class="service-checkbox" value="' +
+        escapeHtml(name) + '" ' + checked + '> ' +
+        escapeHtml(name) + ' — ' + count + ' elementos</label></li>';
     }
     html += '</ul>';
 
@@ -110,11 +124,10 @@ $(function () {
       html += '</ul>';
     }
 
-    html += '<p><small>ID de sesión: ' + escapeHtml(data.session_id) + '</small></p>';
+    html += '<p><small>ID de sesión: ' + escapeHtml(currentSessionId) + '</small></p>';
     $servicesList.html(html);
 
-    currentSessionId = data.session_id;
-    $generateBtn.show();
+    setStep(2);
   }
 
   // --- Book writing area -----------------------------------------------
@@ -130,13 +143,35 @@ $(function () {
   $generateBtn.on('click', function () {
     if (!currentSessionId) return;
 
-    $generateBtn.prop('disabled', true);
-    $bookArea.show();
-    $bookContent.empty();
-    $tocList.empty();
-    $bookArea[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const disabledServices = [];
+    $('#services-list .service-checkbox').each(function () {
+      if (!this.checked) disabledServices.push(this.value);
+    });
 
-    streamBook();
+    $generateBtn.prop('disabled', true);
+
+    $.ajax({
+      url: '/generate/configure',
+      type: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify({ disabled_services: disabledServices }),
+    })
+      .done(function () {
+        setStep(3);
+        $bookContent.empty();
+        $tocList.empty();
+        $bookArea[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        streamBook();
+      })
+      .fail(function (xhr) {
+        $generateBtn.prop('disabled', false);
+        let errText = 'Error del servidor.';
+        try {
+          const errData = JSON.parse(xhr.responseText);
+          errText = errData.error || errText;
+        } catch (_) {}
+        showError(errText);
+      });
   });
 
   // On load, check whether this browser (via cookie) already has a
@@ -149,7 +184,8 @@ $(function () {
 
       if (data.book_status && data.book_status !== 'none') {
         $generateBtn.prop('disabled', true);
-        $bookArea.show();
+        $('#services-list .service-checkbox').prop('disabled', true);
+        setStep(3);
         $bookContent.empty();
         $tocList.empty();
         streamBook();
@@ -297,5 +333,25 @@ $(function () {
 
   $modalGotoHomeBtn.on('click', function () {
     window.location.href = '/';
+  });
+
+  // Resets the cookie-bound session and clears the story so the user can
+  // start over. Anything already added to the library is left alone.
+  $modalNewAdventureBtn.on('click', function () {
+    const confirmed = window.confirm(
+      'Esto borrará la historia actual (a menos que ya la hayas añadido a tu colección). ¿Quieres crear una nueva aventura?'
+    );
+    if (!confirmed) return;
+
+    $modalNewAdventureBtn.prop('disabled', true);
+
+    $.post('/session/reset')
+      .done(function () {
+        window.location.href = '/crear';
+      })
+      .fail(function () {
+        $modalNewAdventureBtn.prop('disabled', false);
+        alert('No se pudo reiniciar la sesión. Inténtalo de nuevo.');
+      });
   });
 });

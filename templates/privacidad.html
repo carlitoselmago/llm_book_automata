@@ -1,24 +1,10 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Protección de datos — Harry Potter y tú</title>
-
-  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/general.less') }}">
-  <link rel="stylesheet/less" type="text/css" href="{{ url_for('static', filename='css/privacidad.less') }}">
-  <script>
-    less = { env: 'development' };
-  </script>
-  <script src="https://cdn.jsdelivr.net/npm/less@4"></script>
-</head>
-<body>
+ {% include 'chunks/header.html' %}
 
   <h1>Protección de datos</h1>
 
-  <p><a href="/">&larr; Volver al inicio</a></p>
+  <p><a class="btn" href="/">&larr; Volver al inicio</a></p>
 
-  <section id="privacidad-content">
+  <div id="privacidad-content">
     <p>
       Esta página explica qué datos se usan para generar tu libro y cómo se tratan.
     </p>
@@ -45,12 +31,6 @@
     </p>
   </section>
 
-  <footer id="site-footer">
-    <a href="{{ url_for('privacidad') }}">Protección de datos</a>
-  </footer>
 
-  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-  <script src="{{ url_for('static', filename='js/general.js') }}"></script>
+   {% include 'chunks/footer.html' %}
 
-</body>
-</html>
