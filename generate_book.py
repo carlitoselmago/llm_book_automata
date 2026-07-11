@@ -58,10 +58,10 @@ def iter_book_chunks(user_description: str, user_name: str):
     chunk to the browser over SSE), so both stay in sync with the same prompt.
     """
     prompt = (
-        f"With this user information:\n\n{user_description}\n\n"
-        f"start writing a book called \"Harry Potter and {user_name}\". "
-        f"Start each new chapter on its own line with a markdown heading, "
-        f"e.g. \"## Chapter 1: Title\", so the structure is easy to follow."
+        f"Con la información del usuario :\n\n{user_description}\n\n"
+        f"Escribe un libro llamado \"Harry Potter and {user_name}\". "
+        f"Empieza cada captítulo con su propia línea con un titular en markdown, "
+        f"e.g. \"## Episodio 1: Ttítulo\", para que la estructura sea fácil de seguir."
     )
 
     payload = {
