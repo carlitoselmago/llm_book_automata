@@ -11,7 +11,7 @@ from flask import Flask, render_template, request, jsonify, Response, send_file
 from werkzeug.utils import secure_filename
 
 import book_builder
-from generate_book import build_user_description, iter_book_chunks
+from generate_book import build_user_description, iter_book_events
 
 app = Flask(__name__)
 # Keep the secret key stable across restarts (via SECRET_KEY) so the
@@ -537,9 +537,9 @@ def _load_book_state(session_id: str) -> dict:
             # "done" marker the generation was interrupted mid-way. We can't
             # resume the LLM call itself, so we just surface what was saved.
             status = 'done' if _book_done_marker(session_id).exists() else 'interrupted'
-            state = {'status': status, 'text': text, 'error': None}
+            state = {'status': status, 'text': text, 'error': None, 'progress': None}
         else:
-            state = {'status': 'none', 'text': '', 'error': None}
+            state = {'status': 'none', 'text': '', 'error': None, 'progress': None}
         _book_sessions[session_id] = state
         return state
 
@@ -553,10 +553,17 @@ def _append_book_text(session_id: str, state: dict, chunk: str) -> None:
 
 def _run_book_generation(session_id: str, state: dict, user_description: str, user_name: str) -> None:
     try:
-        for chunk in iter_book_chunks(user_description, user_name):
-            _append_book_text(session_id, state, chunk)
+        for event in iter_book_events(user_description, user_name):
+            if event['type'] == 'content':
+                _append_book_text(session_id, state, event['text'])
+            elif event['type'] == 'status':
+                # Progress for the UI (e.g. the outline phase, before any prose
+                # exists) — kept in memory only; the SSE loop forwards changes.
+                with _book_lock:
+                    state['progress'] = event
         with _book_lock:
             state['status'] = 'done'
+            state['progress'] = None
         _book_done_marker(session_id).touch()
     except Exception as e:
         app.logger.exception('Book generation failed for session %s', session_id)
@@ -664,6 +671,10 @@ def generate_stream():
         yield ': connected\n\n'  # flushes headers immediately, before any content exists
         with _book_lock:
             sent = state['text']
+            last_progress = state['progress']
+        # Replay current progress + text so a (re)connecting client is in sync.
+        if last_progress is not None:
+            yield f'data: {json.dumps({"progress": last_progress}, ensure_ascii=False)}\n\n'
         if sent:
             yield f'data: {json.dumps({"content": sent}, ensure_ascii=False)}\n\n'
 
@@ -672,6 +683,11 @@ def generate_stream():
                 status = state['status']
                 full_text = state['text']
                 error = state['error']
+                progress = state['progress']
+            if progress != last_progress:
+                last_progress = progress
+                if progress is not None:
+                    yield f'data: {json.dumps({"progress": progress}, ensure_ascii=False)}\n\n'
             if len(full_text) > len(sent):
                 new_part = full_text[len(sent):]
                 sent = full_text

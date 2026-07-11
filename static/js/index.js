@@ -17,6 +17,9 @@ $(function () {
   const $bookArea = $('#section-step-3');
   const $bookContent = $('#book-content');
   const $tocList = $('#book-toc-list');
+  const $bookProgress = $('#book-progress');
+  const $bookProgressLabel = $('#book-progress-label');
+  const $bookProgressBar = $('#book-progress-bar');
   const $bookModal = $('#book-modal');
   const $modalDownloadBtn = $('#modal-download-btn');
   const $modalAddBtn = $('#modal-add-btn');
@@ -193,11 +196,32 @@ $(function () {
     })
     .fail(function () { /* no previous session — normal first visit */ });
 
+  // Progress banner shown before/between chapters. During the outline phase
+  // (no chapter number yet) the bar is indeterminate; while writing it fills
+  // chapter-by-chapter.
+  function showProgress(p) {
+    $bookProgress.show();
+    $bookProgressLabel.text(p.label || 'Preparando…');
+    if (p.phase === 'writing' && p.total && p.chapter > 0) {
+      $bookProgressBar.attr('max', p.total).attr('value', p.chapter);
+    } else {
+      $bookProgressBar.removeAttr('value'); // indeterminate
+    }
+  }
+
+  function hideProgress() {
+    $bookProgress.hide();
+  }
+
   function streamBook() {
     let lineBuffer = '';
     let currentParagraph = null;
     let liveLineEl = null;
     let headerCount = 0;
+
+    // Show something immediately so the page never looks stuck while the
+    // first server event (outline planning) is on its way.
+    showProgress({ label: 'Conectando…' });
 
     const source = new EventSource('/generate/stream');
 
@@ -209,8 +233,12 @@ $(function () {
         return;
       }
       if (payload.error) {
+        hideProgress();
         showError('Error generando el libro: ' + payload.error);
         return;
+      }
+      if (payload.progress) {
+        showProgress(payload.progress);
       }
       if (payload.content) {
         ingestChunk(payload.content);
@@ -219,12 +247,14 @@ $(function () {
 
     source.addEventListener('done', function () {
       source.close();
+      hideProgress();
       $generateBtn.prop('disabled', false);
       checkAndShowModalIfDone();
     });
 
     source.addEventListener('error', function () {
       source.close();
+      hideProgress();
       $generateBtn.prop('disabled', false);
     });
 
