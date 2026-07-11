@@ -17,7 +17,7 @@ import os
 # --- Networking -------------------------------------------------------------
 # Bind to a UNIX socket behind nginx, or a host:port. Default: localhost only,
 # so put a reverse proxy (nginx/caddy) in front for TLS + the public port.
-bind = os.environ.get('GUNICORN_BIND', '127.0.0.1:8000')
+bind = os.environ.get('GUNICORN_BIND', '0.0.0.0:5100')
 
 # --- Concurrency ------------------------------------------------------------
 workers = 1                      # do not increase — see the note above
