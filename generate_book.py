@@ -24,7 +24,7 @@ OUTPUT_FOLDER = Path(os.environ.get('OUTPUT_FOLDER', BASE_DIR / 'outputs'))
 
 # Where the OpenAI-compatible LLM backend (LM Studio, etc.) lives. On a
 # server this usually isn't localhost, so make it configurable.
-LM_STUDIO_BASE_URL = os.environ.get('LM_STUDIO_BASE_URL', 'http://192.168.10.245:1234')
+LM_STUDIO_BASE_URL = os.environ.get('LM_STUDIO_BASE_URL', 'http://192.168.100.138:1234')
 MODEL_NAME = os.environ.get('LM_STUDIO_MODEL', 'deepseek/deepseek-r1-0528-qwen3-8b')
 
 
