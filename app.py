@@ -9,22 +9,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response, send_file
 from werkzeug.utils import secure_filename
-from livereload import Server
 
 import book_builder
 from generate_book import build_user_description, iter_book_chunks
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max
+# Keep the secret key stable across restarts (via SECRET_KEY) so the
+# book-session cookie survives a redeploy; fall back to a random key locally.
+app.secret_key = os.environ.get('SECRET_KEY') or os.urandom(24)
+# Max upload size — overridable so ops can tune it per deployment (MB).
+_max_mb = int(os.environ.get('MAX_UPLOAD_MB', '500'))
+app.config['MAX_CONTENT_LENGTH'] = _max_mb * 1024 * 1024
 
 
 
 BASE_DIR = Path(__file__).parent
-UPLOAD_FOLDER = BASE_DIR / 'uploads'
-OUTPUT_FOLDER = BASE_DIR / 'outputs'
-UPLOAD_FOLDER.mkdir(exist_ok=True)
-OUTPUT_FOLDER.mkdir(exist_ok=True)
+# Data dirs default to the project folder but can point at a mounted volume
+# on a server (outputs/ holds the persistent library + generated PDFs).
+UPLOAD_FOLDER = Path(os.environ.get('UPLOAD_FOLDER', BASE_DIR / 'uploads'))
+OUTPUT_FOLDER = Path(os.environ.get('OUTPUT_FOLDER', BASE_DIR / 'outputs'))
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 
 MAX_ITEMS_PER_SERVICE = 10
@@ -843,9 +848,14 @@ def library_pdf(session_id):
 
 
 if __name__ == '__main__':
+    # Local development only. In production the app is served by a WSGI
+    # server (gunicorn) importing the `app` object above — this block never
+    # runs there, so `livereload` stays a dev-only dependency.
+    from livereload import Server
+
     server = Server(app.wsgi_app)
     server.watch('static/**/*.less')
     server.watch('static/**/*.js')
     server.watch('templates/*-html')
-    server.serve(debug=True, port=5000)
+    server.serve(debug=True, port=int(os.environ.get('PORT', 5000)))
     #app.run(debug=True, port=5000, use_reloader=False, threaded=True)

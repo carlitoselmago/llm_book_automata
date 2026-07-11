@@ -1,0 +1,32 @@
+[Unit]
+Description=llm_book_automata (Flask + gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+
+# --- Adjust these to your server ---
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/llm_book_automata
+
+# Load configuration (SECRET_KEY, LM_STUDIO_BASE_URL, OUTPUT_FOLDER, ...).
+# Copy deploy/env.example to /etc/llm-book.env and fill it in.
+EnvironmentFile=/etc/llm-book.env
+
+# Use the project's virtualenv gunicorn.
+ExecStart=/opt/llm_book_automata/.venv/bin/gunicorn wsgi:app -c gunicorn.conf.py
+
+Restart=on-failure
+RestartSec=5
+
+# Hardening (relax if it gets in the way).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+# outputs/ + uploads/ must stay writable. If you set OUTPUT_FOLDER/UPLOAD_FOLDER
+# to a path outside WorkingDirectory, add it to ReadWritePaths too.
+ReadWritePaths=/opt/llm_book_automata
+
+[Install]
+WantedBy=multi-user.target

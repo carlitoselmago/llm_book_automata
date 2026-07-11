@@ -1,3 +1,12 @@
-google-api-python-client
-google-auth
-requests
+# Runtime dependencies
+Flask>=3.1,<4
+requests>=2.32,<3
+Pillow>=9.5
+reportlab>=4.3,<5
+
+# WSGI server for production (single worker + threads — see gunicorn.conf.py)
+gunicorn>=22,<24
+
+# Dev-only: hot reload when running `python app.py` locally.
+# Not needed on the server; safe to omit there.
+livereload>=2.6

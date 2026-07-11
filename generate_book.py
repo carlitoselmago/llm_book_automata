@@ -10,6 +10,7 @@ web integration are future phases.
 """
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,10 +20,12 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 BASE_DIR = Path(__file__).parent
-OUTPUT_FOLDER = BASE_DIR / 'outputs'
+OUTPUT_FOLDER = Path(os.environ.get('OUTPUT_FOLDER', BASE_DIR / 'outputs'))
 
-LM_STUDIO_BASE_URL = "http://127.0.0.1:1234"
-MODEL_NAME = "liquid/lfm2.5-1.2b"#"mistralai/ministral-3-3b"  # change to switch models
+# Where the OpenAI-compatible LLM backend (LM Studio, etc.) lives. On a
+# server this usually isn't localhost, so make it configurable.
+LM_STUDIO_BASE_URL = os.environ.get('LM_STUDIO_BASE_URL', 'http://192.168.10.245:1234')
+MODEL_NAME = os.environ.get('LM_STUDIO_MODEL', 'deepseek/deepseek-r1-0528-qwen3-8b')
 
 
 def build_user_description(data: dict) -> str:
@@ -71,6 +74,9 @@ def iter_book_chunks(user_description: str, user_name: str):
         f"{LM_STUDIO_BASE_URL}/v1/chat/completions",
         json=payload,
         stream=True,
+        # (connect, read): fail fast if the backend is unreachable, but allow
+        # unlimited time between streamed tokens for slow generations.
+        timeout=(10, None),
     ) as resp:
         resp.raise_for_status()
         for raw_line in resp.iter_lines():

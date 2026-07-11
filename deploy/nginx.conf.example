@@ -1,0 +1,31 @@
+# Reverse proxy for llm_book_automata. Put this in a server block
+# (e.g. /etc/nginx/sites-available/llm-book) and point it at gunicorn's bind.
+#
+# Two app-specific requirements are handled below:
+#   1. Large Google Takeout uploads  -> client_max_body_size
+#   2. Server-Sent Events (/generate/stream) -> disable proxy buffering
+#
+# For TLS, run certbot after this is working, or add your own ssl_* lines.
+
+server {
+    listen 80;
+    server_name your-domain.example;
+
+    # Google Takeout zips are big; match/exceed MAX_UPLOAD_MB.
+    client_max_body_size 512m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE / streaming: don't buffer, don't time out mid-book.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+}
