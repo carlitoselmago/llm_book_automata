@@ -32,7 +32,7 @@ UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 
-MAX_ITEMS_PER_SERVICE = 10
+MAX_ITEMS_PER_SERVICE = 2000
 
 # Google services to ignore — contain no useful personal narrative data
 BLACKLISTED_SERVICES = {
