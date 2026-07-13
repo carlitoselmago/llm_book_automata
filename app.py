@@ -32,7 +32,7 @@ UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 
-MAX_ITEMS_PER_SERVICE = 2000
+MAX_ITEMS_PER_SERVICE = 500
 
 # Google services to ignore — contain no useful personal narrative data
 BLACKLISTED_SERVICES = {
@@ -55,7 +55,12 @@ BLACKLISTED_SERVICES = {
     'Google TV',
     'Google Arts & Culture',
     'Google News',
-    'Google Play Games'
+    'Google Play Games',
+    'Google Play Store',
+    'Image Search',
+    'Flights',
+    'Song Search',
+    ''
 }
 
 
@@ -386,7 +391,7 @@ def process_takeout_zip(zip_path: Path, session_id: str) -> dict:
         'session_id': session_id,
         'profile': {},
         'services': {},
-        'skipped_services': [],
+        #'skipped_services': [],
     }
 
     with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -409,9 +414,10 @@ def process_takeout_zip(zip_path: Path, session_id: str) -> dict:
                 service_files[parts[2]] = name
 
         for service_name, file_path in sorted(service_files.items()):
-            if service_name in BLACKLISTED_SERVICES:
-                result['skipped_services'].append(service_name)
-                continue
+            #if service_name in BLACKLISTED_SERVICES:
+            #    result['skipped_services'].append(service_name)
+            #    continue
+            pass
 
             html_bytes = zf.read(file_path)
             if service_name in SERVICE_PARSERS:
