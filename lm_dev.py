@@ -301,7 +301,7 @@ if __name__ == '__main__':
 
 	# The session this run writes about: its _prompt.md feeds the first call, and
 	# its profile name goes on the cover.
-	SESSION_ID = 'ff53bf70-fc82-4837-b7db-ecf9efbc734b'
+	SESSION_ID = '3901aa49-f142-4408-ad37-11d740eff2b3'#'ff53bf70-fc82-4837-b7db-ecf9efbc734b'
 	user_name = generate_book.get_user_name(
 		generate_book.load_session(OUTPUT_DIR / f'{SESSION_ID}.json'))
 
