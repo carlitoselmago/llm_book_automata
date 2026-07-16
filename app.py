@@ -11,7 +11,7 @@ from flask import Flask, render_template, request, jsonify, Response, send_file
 from werkzeug.utils import secure_filename
 
 import book_builder
-from generate_book import build_user_description, iter_book_events
+from generate_book import get_user_name, iter_book_events
 
 app = Flask(__name__)
 # Keep the secret key stable across restarts (via SECRET_KEY) so the
@@ -34,58 +34,45 @@ OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
 
 MAX_ITEMS_PER_SERVICE = 500
 
-# Google Takeout localizes folder and file names to the account language.
-# We support at least: English, Spanish, Catalan, French, Italian.
-# The "My Activity" folder holds one subfolder per service, each with a single
-# activity HTML file inside it.
-ACTIVITY_DIR_NAMES = {
-    'My Activity',        # en
-    'Mi actividad',       # es
-    'La meva activitat',  # ca
-    'Mon activité',       # fr
-    'Le mie attività',    # it
-}
-# File name of the per-service profile export (JSON keys stay English).
-PROFILE_JSON_NAMES = {
-    'Profile.json',   # en
-    'Perfil.json',    # es, ca
-    'Profil.json',    # fr
-    'Profilo.json',   # it
-}
+# How many items to skip after each one we keep. Takeout lists activity newest
+# first, so taking the first N would only ever see the last few days; skipping
+# spreads the sample further back. 0 keeps everything, 1 keeps every other item,
+# 2 keeps one in three, and so on.
+SKIP_ITEMS = 1
 
-# Google services to ignore — they contain no useful personal narrative data.
-# The service comes from the (localized) activity folder name, so each one is
-# listed in every language we need to match. Many are brand names that Takeout
-# keeps in English across locales (Drive, Chrome, Google Lens…); those need a
-# single entry. Extend the lists to add Catalan/French/Italian when needed.
-_BLACKLIST_BY_SERVICE = {
-    'Ads':                     ['Ads', 'Anuncios'],
-    'Assistant':               ['Assistant', 'Asistente'],
-    'Android':                 ['Android'],
-    'Discover':                ['Discover'],
-    'Drive':                   ['Drive'],
-    'Google Translate':        ['Google Translate', 'Traductor de Google'],
-    'Hotels':                  ['Hotels', 'Hoteles'],
-    'Google Lens':             ['Google Lens'],
-    'Google Play Movies & TV': ['Google Play Movies & TV', 'Google Play Películas y TV'],
-    'Voice Match':             ['Voice Match', 'Coincidencia de voz'],
-    'Developers':              ['Developers', 'Desarrolladores'],
-    'Google Play Console':     ['Google Play Console'],
-    'Google Business Profile': ['Google Business Profile', 'Perfil de Empresa de Google'],
-    'Takeout':                 ['Takeout'],
-    'Help':                    ['Help', 'Ayuda'],
-    'Android TV':              ['Android TV'],
-    'Google TV':               ['Google TV'],
-    'Google Arts & Culture':   ['Google Arts & Culture', 'Google Arts and Culture'],
-    'Google News':             ['Google News', 'Google Noticias', 'Noticias'],
-    'Google Play Games':       ['Google Play Games', 'Google Play Juegos'],
-    'Google Play Store':       ['Google Play Store'],
-    'Image Search':            ['Image Search', 'Búsqueda de imágenes'],
-    'Flights':                 ['Flights', 'Vuelos'],
-    'Song Search':             ['Song Search', 'Búsqueda de canciones'],
-}
+# We find the profile by parsing JSON files rather than by name (names are
+# localized), so cap what we're willing to read: a profile is a few KB, while
+# a Takeout can carry a 200MB Location History.json we must not load to check.
+PROFILE_MAX_BYTES = 1_000_000
+
+# Services to ignore — they hold no useful personal narrative data. Takeout
+# localizes folder names, so each service is listed in English plus its Spanish
+# translation; brand names Takeout keeps in English everywhere need one entry.
 BLACKLISTED_SERVICES = {
-    name for names in _BLACKLIST_BY_SERVICE.values() for name in names
+    'Ads', 'Anuncios',
+    'Assistant', 'Asistente',
+    'Android',
+    'Android TV',
+    'Discover',
+    'Drive',
+    'Developers', 'Desarrolladores',
+    'Flights', 'Vuelos',
+    'Google Arts & Culture', 'Google Arts and Culture',
+    'Google Business Profile', 'Perfil de Empresa de Google',
+    'Google Lens',
+    'Google News', 'Google Noticias', 'Noticias',
+    'Google Play Console',
+    'Google Play Games', 'Google Play Juegos',
+    'Google Play Movies & TV', 'Google Play Películas y TV',
+    'Google Play Store',
+    'Google Translate', 'Traductor de Google',
+    'Google TV',
+    'Help', 'Ayuda',
+    'Hotels', 'Hoteles',
+    'Image Search', 'Búsqueda de imágenes',
+    'Song Search', 'Búsqueda de canciones',
+    'Takeout',
+    'Voice Match', 'Coincidencia de voz',
 }
 
 
@@ -125,7 +112,8 @@ def _strip_html(raw: bytes) -> str:
     return text.decode('utf-8', errors='replace').strip()
 
 
-def parse_activity_html(html_bytes: bytes, max_items: int) -> list[dict]:
+def parse_activity_html(html_bytes: bytes, max_items: int,
+                        skip: int = SKIP_ITEMS) -> list[dict]:
     """Extract activity items from a Google MyActivity HTML file using regex.
 
     Language-agnostic: it keeps each cell's full text as the item content and
@@ -133,12 +121,18 @@ def parse_activity_html(html_bytes: bytes, max_items: int) -> list[dict]:
     words. This makes one parser work for every service and every Takeout
     locale (English, Spanish, Catalan, French, Italian, …).
 
+    Keeps one item then skips `skip` of them, up to `max_items`, so the sample
+    is spread over the export's whole date range rather than its newest corner.
+
     Uses regex instead of a DOM parser so it stays fast on 100MB+ files.
     """
     items = []
-    for m in _RE_OUTER_CELL.finditer(html_bytes):
+    stride = skip + 1
+    for i, m in enumerate(_RE_OUTER_CELL.finditer(html_bytes)):
         if len(items) >= max_items:
             break
+        if i % stride:
+            continue
 
         cc = _RE_CONTENT_CELL.search(m.group(0))
         if not cc:
@@ -162,18 +156,32 @@ def parse_activity_html(html_bytes: bytes, max_items: int) -> list[dict]:
 
 
 _STRIP_FIELDS = {'url', 'timestamp'}
+_RE_URL = re.compile(r'https?://|www\.', re.IGNORECASE)
 
 
 def _clean_items(items: list[dict]) -> list[dict]:
-    """Remove url/timestamp from every item; drop items with no content left."""
+    """Keep only fields worth narrating: no url/timestamp, and nothing holding a
+    URL anywhere in its value (a raw link tells the model nothing about the
+    person). Items left with no field at all are dropped.
+
+    Repeats are dropped too, keeping the first: people search the same thing
+    over and over, and the model learns nothing from the 30th "Buscaste renfe"
+    that it didn't learn from the first. Called once per service, so this
+    de-duplicates within a service and leaves cross-service repeats alone.
+    """
     result = []
+    seen = set()
     for item in items:
         cleaned = {k: v for k, v in item.items()
-                   if k not in _STRIP_FIELDS and v is not None and v != ''}
-        # Drop items that have only URL-valued fields as their sole content
-        values = list(cleaned.values())
-        if values and not all(str(v).startswith('http') for v in values):
-            result.append(cleaned)
+                   if k not in _STRIP_FIELDS and v is not None and v != ''
+                   and not _RE_URL.search(str(v))}
+        if not cleaned:
+            continue
+        key = tuple(sorted(cleaned.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
     return result
 
 
@@ -220,51 +228,50 @@ def parse_profile_json(raw: bytes) -> dict:
 
 
 def process_takeout_zip(zip_path: Path, session_id: str) -> dict:
-    """Extract zip and parse profile + each non-blacklisted MyActivity.html."""
+    """Parse the profile + every activity HTML in the zip.
+
+    Folder names are ignored entirely: any .html file is treated as an activity
+    export whose service is the folder containing it, and any .json that parses
+    into a profile is the profile. That way the zip works whatever language
+    Takeout used, without a table of translated folder names to maintain.
+    """
     result = {
         'session_id': session_id,
         'profile': {},
         'services': {},
-        #'skipped_services': [],
+        'skipped_services': [],
     }
 
     with zipfile.ZipFile(zip_path, 'r') as zf:
-        names = zf.namelist()
-
-        # Profile — Takeout/<Profile>/<Profile>.json (folder/file are localized)
-        profile_path = next(
-            (n for n in names if n.split('/')[-1] in PROFILE_JSON_NAMES), None
-        )
-        if profile_path:
-            result['profile'] = parse_profile_json(zf.read(profile_path))
-
-        # Collect service paths: Takeout/<My Activity>/<Service>/<Activity>.html
-        # Folder and file names are localized, so we key off the localized
-        # "My Activity" folder and take the HTML in the service folder under it.
-        service_files = {}
-        for name in names:
+        for info in sorted(zf.infolist(), key=lambda i: i.filename):
+            name = info.filename
             parts = name.split('/')
-            if len(parts) < 3 or not parts[-1].lower().endswith('.html'):
+            if len(parts) < 2:
                 continue
-            # The service folder sits directly under the activity folder.
             # Takeout sometimes puts non-breaking spaces (\xa0) in folder names
-            # (e.g. "Google\xa0Play\xa0Games"), so normalize them to plain
-            # spaces before matching, and store the clean name as the key.
-            for i, part in enumerate(parts[:-2]):
-                if part.replace('\xa0', ' ') in ACTIVITY_DIR_NAMES:
-                    service_files[parts[i + 1].replace('\xa0', ' ')] = name
-                    break
+            # (e.g. "Google\xa0Play\xa0Games"); normalize them to plain spaces.
+            service_name = parts[-2].replace('\xa0', ' ')
+            lower = parts[-1].lower()
 
-        for service_name, file_path in sorted(service_files.items()):
-            if service_name in BLACKLISTED_SERVICES:
+            if lower.endswith('.json'):
+                if not result['profile'] and info.file_size <= PROFILE_MAX_BYTES:
+                    result['profile'] = parse_profile_json(zf.read(name))
                 continue
-            html_bytes = zf.read(file_path)
-            items = parse_activity_html(html_bytes, MAX_ITEMS_PER_SERVICE)
-            items = _clean_items(items)
-            result['services'][service_name] = {
-                'count': len(items),
-                'items': items,
-            }
+
+            if not lower.endswith('.html'):
+                continue
+
+            if service_name in BLACKLISTED_SERVICES:
+                if service_name not in result['skipped_services']:
+                    result['skipped_services'].append(service_name)
+                continue
+
+            items = _clean_items(parse_activity_html(zf.read(name), MAX_ITEMS_PER_SERVICE))
+            if items:
+                result['services'][service_name] = {
+                    'count': len(items),
+                    'items': items,
+                }
 
     return result
 
@@ -391,9 +398,9 @@ def _append_book_text(session_id: str, state: dict, chunk: str) -> None:
         f.write(chunk)
 
 
-def _run_book_generation(session_id: str, state: dict, user_description: str, user_name: str) -> None:
+def _run_book_generation(session_id: str, state: dict, data: dict) -> None:
     try:
-        for event in iter_book_events(user_description, user_name):
+        for event in iter_book_events(data):
             if event['type'] == 'content':
                 _append_book_text(session_id, state, event['text'])
             elif event['type'] == 'status':
@@ -431,11 +438,9 @@ def _ensure_book_started(session_id: str) -> dict:
                     if name not in disabled_services
                 },
             }
-        user_name = data.get('profile', {}).get('name') or 'You'
-        user_description = build_user_description(data)
         threading.Thread(
             target=_run_book_generation,
-            args=(session_id, state, user_description, user_name),
+            args=(session_id, state, data),
             daemon=True,
         ).start()
     return state
@@ -577,7 +582,7 @@ def _save_library(entries: list[dict]) -> None:
 
 def _session_user_name(session_id: str) -> str:
     data = json.loads((OUTPUT_FOLDER / f'{session_id}.json').read_text(encoding='utf-8'))
-    return data.get('profile', {}).get('name') or 'You'
+    return get_user_name(data)
 
 
 def _ensure_book_artifacts(session_id: str, user_name: str) -> tuple[Path, Path]:
@@ -667,6 +672,7 @@ def session_reset():
 
         for path in (
             OUTPUT_FOLDER / f'{session_id}.json',
+            OUTPUT_FOLDER / f'{session_id}_prompt.md',
             _book_file(session_id),
             _book_done_marker(session_id),
         ):

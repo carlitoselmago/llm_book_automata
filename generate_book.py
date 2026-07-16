@@ -8,14 +8,24 @@ of API calls, so the structure is easy to extend:
     2. Writing  — one streaming call per chapter that writes it extensively,
        fed the tail of what's been written so far for continuity.
 
-The public entry point is `iter_book_events`, an orchestrator that yields
-structured events (`status` / `content`) so callers (the Flask SSE endpoint,
-the CLI) can show progress before any prose exists — the outline call takes a
-while, and we don't want the browser to look frozen meanwhile.
+The entry points (`iter_book_events`, `iter_book_chunks`, `stream_book`) all
+take a single `source`: the path to a processed-Takeout JSON file, or an
+already-loaded data dict. So the whole pipeline is drivable from a file:
 
-Low-level helpers (`chat`, `stream_chat`) each take a message list, so you can
-compose new phases (a per-chapter summary pass, a rewrite pass, …) by writing
-another prompt builder and reusing them.
+    import generate_book
+    generate_book.stream_book("outputs/<session_id>.json")      # print it
+    text = "".join(generate_book.iter_book_chunks("out.json"))  # collect it
+
+`iter_book_events` yields structured events (`status` / `content`) so callers
+(the Flask SSE endpoint, the CLI) can show progress before any prose exists —
+the outline call takes a while, and we don't want the caller to look frozen.
+
+For manual tweaking, the pieces below the entry points are composable and take
+explicit arguments rather than a session: `load_session` / `get_user_name` /
+`build_user_description` turn the data into a prompt; `generate_outline` and
+`iter_chapter` are the two phases; `chat` / `stream_chat` take a message list,
+so you can add a phase (a summary pass, a rewrite pass, …) with a new prompt
+builder and reuse them.
 """
 import argparse
 import json
@@ -49,6 +59,15 @@ CONTINUITY_CHARS = 1200
 MIN_CHAPTERS = 4
 MAX_CHAPTERS = 8
 
+# How much activity data to put in the prompt. A processed session can hold
+# hundreds of items per service, which would blow past a local model's context
+# window — a representative sample is enough to mine facts for the book. These
+# defaults keep the outline prompt near ~2.7k tokens, leaving room in an 8k
+# context for a reasoning model to think *and* answer. Raise them if your model
+# has a larger context; lower them if it's smaller.
+PROMPT_ITEMS_PER_SERVICE = 20
+PROMPT_ITEM_CHARS = 120
+
 SYSTEM_PROMPT = (
     "Eres un novelista que escribe en español de España (castellano), con un "
     "estilo cercano al de las novelas de aventuras juveniles tipo \"Harry "
@@ -79,10 +98,20 @@ def _post(messages: list[dict], *, stream: bool, temperature: float):
     )
 
 
+def _raise_for_status(resp) -> None:
+    """Like resp.raise_for_status() but include the backend's error body, which
+    is where LM Studio explains a 400 (e.g. the prompt exceeds the context)."""
+    if resp.status_code >= 400:
+        body = resp.text[:500].strip()
+        raise requests.HTTPError(
+            f"{resp.status_code} from {resp.url}: {body}", response=resp
+        )
+
+
 def chat(messages: list[dict], *, temperature: float = 0.4) -> str:
     """One non-streaming completion; returns the cleaned text response."""
     resp = _post(messages, stream=False, temperature=temperature)
-    resp.raise_for_status()
+    _raise_for_status(resp)
     data = resp.json()
     content = data["choices"][0]["message"].get("content") or ""
     return _strip_think(content).strip()
@@ -91,7 +120,7 @@ def chat(messages: list[dict], *, temperature: float = 0.4) -> str:
 def stream_chat(messages: list[dict], *, temperature: float = 0.85):
     """Yield successive text deltas from a streaming completion."""
     with _post(messages, stream=True, temperature=temperature) as resp:
-        resp.raise_for_status()
+        _raise_for_status(resp)
         yield from _filter_think(_iter_sse_deltas(resp))
 
 
@@ -181,11 +210,40 @@ def _filter_think(chunks):
 
 
 # ---------------------------------------------------------------------------
-# Turning Takeout data into a prompt-ready description.
+# Loading a processed-Takeout session and turning it into a prompt.
 # ---------------------------------------------------------------------------
 
-def build_user_description(data: dict) -> str:
-    """Serialize profile + activity items into plain text for the prompt."""
+def load_session(source) -> dict:
+    """Return the processed-Takeout data dict.
+
+    `source` is either a path (str/Path) to an ``outputs/<session_id>.json``
+    file, or an already-loaded dict (returned unchanged, so callers can filter
+    services before generating).
+    """
+    if isinstance(source, (str, Path)):
+        return json.loads(Path(source).read_text(encoding='utf-8'))
+    return source
+
+
+def get_user_name(data: dict) -> str:
+    """The protagonist's name from the profile, or a neutral default."""
+    return data.get('profile', {}).get('name') or 'You'
+
+
+def build_user_description(data: dict, *,
+                           items_per_service: int = PROMPT_ITEMS_PER_SERVICE,
+                           item_chars: int = PROMPT_ITEM_CHARS) -> str:
+    """Serialize profile + a bounded sample of activity as markdown.
+
+    Only the first `items_per_service` items of each service are included, each
+    truncated to `item_chars`, so the prompt stays within the model's context
+    window no matter how much data the session holds.
+
+    Items are emitted as their title text alone, under a markdown heading per
+    service. Once the Takeout processing has dropped urls and timestamps a title
+    is all an item holds, so wrapping each one back up as JSON cost ~5 tokens of
+    syntax — a fifth of a truncated item — and told the model nothing.
+    """
     lines = []
 
     profile = data.get('profile', {})
@@ -197,9 +255,14 @@ def build_user_description(data: dict) -> str:
         items = info.get('items', [])
         if not items:
             continue
-        lines.append(f"\n{service_name}:")
-        for item in items:
-            lines.append(f"- {json.dumps(item, ensure_ascii=False)}")
+        lines.append(f"\n## {service_name}")
+        for item in items[:items_per_service]:
+            title = (item.get('title') or '').strip()
+            if not title:
+                continue
+            if len(title) > item_chars:
+                title = title[:item_chars] + '…'
+            lines.append(f"- {title}")
 
     return '\n'.join(lines)
 
@@ -317,7 +380,29 @@ def iter_chapter(chapter: dict, index: int, total: int,
 #   {'type': 'content', 'text': str}
 # ---------------------------------------------------------------------------
 
-def iter_book_events(user_description: str, user_name: str):
+def _save_prompt(data: dict, user_description: str) -> None:
+    """Mirror the description to outputs/<session_id>_prompt.md.
+
+    Purely a debug artifact: the description is built per run and otherwise only
+    ever exists inside the request to the model, so this is the one way to read
+    back what a given session was actually told. Skipped for data with no
+    session_id (a hand-built dict), and never read by anything.
+    """
+    session_id = data.get('session_id')
+    if not session_id:
+        return
+    OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
+    (OUTPUT_FOLDER / f'{session_id}_prompt.md').write_text(
+        user_description, encoding='utf-8')
+
+
+def iter_book_events(source):
+    """Generate the book from a JSON file path (or data dict); yield events."""
+    data = load_session(source)
+    user_name = get_user_name(data)
+    user_description = build_user_description(data)
+    _save_prompt(data, user_description)
+
     yield {
         'type': 'status', 'phase': 'outline',
         'label': 'Planificando los capítulos de tu libro…',
@@ -379,15 +464,16 @@ def _iter_freeform_events(user_description: str, user_name: str):
 # Convenience wrappers for callers that only want the text (CLI, tests).
 # ---------------------------------------------------------------------------
 
-def iter_book_chunks(user_description: str, user_name: str):
+def iter_book_chunks(source):
     """Yield only the book text, discarding status events."""
-    for event in iter_book_events(user_description, user_name):
+    for event in iter_book_events(source):
         if event['type'] == 'content':
             yield event['text']
 
 
-def stream_book(user_description: str, user_name: str) -> None:
-    for event in iter_book_events(user_description, user_name):
+def stream_book(source) -> None:
+    """Print the book to stdout (status labels go to stderr)."""
+    for event in iter_book_events(source):
         if event['type'] == 'status':
             print(f"\n[{event['label']}]\n", file=sys.stderr, flush=True)
         else:
@@ -397,25 +483,28 @@ def stream_book(user_description: str, user_name: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Stream a book draft from a local LM Studio model using a processed Takeout session."
+        description="Stream a book draft from a local LLM using a processed-Takeout JSON file."
     )
     parser.add_argument(
-        "session_id",
-        help="Session ID of the processed Takeout output (outputs/<session_id>.json)",
+        "json_path",
+        help="Path to a processed-Takeout JSON file (e.g. outputs/<session_id>.json). "
+             "A bare session id is also accepted.",
     )
     args = parser.parse_args()
 
-    output_path = OUTPUT_FOLDER / f"{args.session_id}.json"
-    if not output_path.exists():
-        print(f"No output found for session {args.session_id} at {output_path}", file=sys.stderr)
-        sys.exit(1)
+    path = Path(args.json_path)
+    if not path.exists():
+        # Convenience: allow a bare session id, resolved under OUTPUT_FOLDER.
+        fallback = OUTPUT_FOLDER / f"{args.json_path}.json"
+        if not fallback.exists():
+            print(f"No such file: {path}", file=sys.stderr)
+            sys.exit(1)
+        path = fallback
 
-    data = json.loads(output_path.read_text(encoding='utf-8'))
-    user_name = data.get('profile', {}).get('name') or 'You'
-    user_description = build_user_description(data)
-
-    print(f"Generating \"Harry Potter y {user_name}\" with model {MODEL_NAME}...\n")
-    stream_book(user_description, user_name)
+    data = load_session(path)
+    print(f'Generating "Harry Potter y {get_user_name(data)}" with model {MODEL_NAME}...\n',
+          file=sys.stderr, flush=True)
+    stream_book(data)
 
 
 if __name__ == '__main__':
