@@ -1,1 +1,16 @@
-Este libro ha sido creado en harry potter y tu.
+### Lo que perdemos al final siempre vuelve a nosotros… aunque a veces no del modo que esperamos
+
+
+Este libro ha sido generado como parte de la performance digital “Harry Potter y tú” de Ezequiel Soriano y Carlos Carbonell durante el ciclo Fora de Servei de Cultural Rizoma.
+
+La generación del texto se ha llevado a cabo de forma automatizada por modelos pequeños de pesos abiertos en un servidor local.
+
+Girona, 2026.
+
+<sub>
+DESCARGO DE RESPONSABILIDAD
+
+Uso de Datos y Privacidad: Los datos utilizados han sido compartidos voluntariamente por los participantes para este proyecto. Debido al carácter automatizado y experimental de la IA, dicha información puede aparecer procesada, descontextualizada o combinada de formas imprevistas. No nos hacemos responsables de las interpretaciones, errores o representaciones inusuales generadas por el modelo.
+​Copyright y Contenido: Obra creada con fines puramente artísticos, didácticos y culturales, sin intención de infringir derechos de autor. Al ser un proceso automatizado por un LLM, los creadores de la performance no ostentan la propiedad de los materiales procesados, ni se hacen responsables de cualquier error, coincidencia o contenido imprevisto que el modelo pueda generar.
+​Si deseas que eliminemos o modifiquemos cualquier dato o contenido que te concierna, escríbenos a nuestros correos personales para solucionarlo.
+</sub>

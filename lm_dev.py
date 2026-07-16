@@ -79,12 +79,21 @@ from pathlib import Path
 
 import requests
 
+import book_builder
+import generate_book
+
 BASE_URL = os.environ.get('LM_STUDIO_BASE_URL', 'http://192.168.100.138:1234')
 MODEL = os.environ.get('LM_STUDIO_MODEL', 'deepseek/deepseek-r1-0528-qwen3-8b')
 OUTPUT_DIR = Path(os.environ.get('OUTPUT_FOLDER', Path(__file__).parent / 'outputs'))
 
+# The Stable Diffusion server — a different box/port from LM Studio.
+SD_BASE_URL = os.environ.get('SD_BASE_URL', 'http://192.168.100.138:8000')
+
 # (connect, read): fail fast if the backend is down, wait forever for tokens.
 TIMEOUT = (10, None)
+# Same, for diffusion: one silent wait ending in the whole PNG, so there are no
+# tokens trickling back to prove it's alive — just let it take as long as it takes.
+SD_TIMEOUT = (10, None)
 
 
 def models() -> list[str]:
@@ -148,6 +157,29 @@ def complete(prompt: str, *, model: str = MODEL, stream: bool = False, **params)
 				 stream=stream,
 				 pick=lambda choice: choice['text'],
 				 pick_delta=lambda choice: choice.get('text'))
+
+
+def image(prompt: str, path, **params):
+	"""Generate a PNG on the Stable Diffusion server; returns the saved Path.
+
+	Like chat(), unknown kwargs go straight to the API — negative_prompt, steps,
+	guidance_scale, width, height, seed. It answers with the raw PNG bytes, not
+	JSON, so an error body is the only thing worth decoding:
+
+		lm_dev.image("a red banjo on a desk", "outputs/banjo.png")
+		lm_dev.image("...", "out.png", width=512, height=768, seed=7)
+
+	seed= makes a run repeatable; without it every call redraws from scratch.
+	"""
+	resp = requests.post(f'{SD_BASE_URL}/generate',
+						 json={'prompt': prompt, **params}, timeout=SD_TIMEOUT)
+	if resp.status_code >= 400:
+		raise requests.HTTPError(f'{resp.status_code} from {resp.url}: '
+								 f'{resp.text[:500].strip()}')
+	path = Path(path)
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_bytes(resp.content)
+	return path
 
 
 def _call(path: str, payload: dict, *, stream: bool, pick, pick_delta):
@@ -255,6 +287,23 @@ if __name__ == '__main__':
 
 	import time
 	start_time = time.time()
+
+	"""
+	user_name="Fulanito Martínez"
+	capitulos=["Hola","Adios"]
+	stamp="___"
+	cover_path = book_builder.build_cover_image(user_name, OUTPUT_DIR / f'libro_{stamp}_cover.png')
+	pdf_path = book_builder.build_pdf(user_name, '\n\n'.join(capitulos), cover_path,
+									  OUTPUT_DIR / f'libro_{stamp}.pdf')
+	print(f'pdf guardado: {pdf_path}  (portada: {cover_path})')
+	sys.exit()
+	"""
+
+	# The session this run writes about: its _prompt.md feeds the first call, and
+	# its profile name goes on the cover.
+	SESSION_ID = 'ff53bf70-fc82-4837-b7db-ecf9efbc734b'
+	user_name = generate_book.get_user_name(
+		generate_book.load_session(OUTPUT_DIR / f'{SESSION_ID}.json'))
 
 	#test=chat('Escribe un chiste guarro', model="dirty-muse-writer-v01-uncensored-erotica-nsfw-i1")
 	#print(test)
@@ -382,10 +431,14 @@ Return only the final information.
 
 
 """
-	text = chat(prompt, model="ibm/granite-4-h-tiny", attach="outputs/ff53bf70-fc82-4837-b7db-ecf9efbc734b_prompt.md")
+	text = chat(prompt, model="ibm/granite-4-h-tiny", attach=OUTPUT_DIR / f'{SESSION_ID}_prompt.md')
 	print(text)
 	print("--- %s seconds ---" % (time.time() - start_time))
 	print("")
+
+	# Keep the profile: `text` is reassigned by the synopsis call below, and the
+	# cover art prompt at the end needs the user's real references, not the plot.
+	perfil = text
 
 
 	# f-string: without the f, "{text}" goes to the model as those six literal
@@ -467,10 +520,10 @@ Return only the final information.
 
 	chapter_outlines=[]
 
-	for i in range(1,10):
+	for i in range(0,10):
 
 		prompt=f"""
-		Extract the especific text tat describes the info in the chapter #{i}, only that, no further explanation:
+		Extract the especific text tat describes the info in the chapter #{i+1}, only that, no further explanation:
 
 		Chapters:
 		{outline}
@@ -534,7 +587,42 @@ Return only the final information.
 		print("")
 
 	# Timestamped: a run takes long enough that clobbering the previous one hurts.
-	rtf_path = save_rtf(capitulos, OUTPUT_DIR / f'libro_{time.strftime("%Y%m%d_%H%M%S")}.rtf')
+	stamp = time.strftime("%Y%m%d_%H%M%S")
+	rtf_path = save_rtf(capitulos, OUTPUT_DIR / f'libro_{stamp}.rtf')
 	print(f'libro guardado: {rtf_path}  ({len(capitulos)} capitulos, {sum(len(c) for c in capitulos)} chars)')
+
+	# Cover art: ask for ONE distinctive thing from the profile, then draw it.
+	# One subject, because a prompt listing several just averages them into mush.
+	prompt=f"""
+	PROFILE:
+
+	{perfil}
+
+	Pick the SINGLE most distinctive object from this profile — one
+	only, the one that best identifies this person.
+.	
+	Give me the name of the object only, no explanations.
+
+	"""
+
+	sd_prompt = "Harry Potter and "+chat(prompt, model="ibm/granite-4-h-tiny").strip().strip('"')
+	print(f'prompt de portada: {sd_prompt}')
+
+	# Shaped like the cover's art window, so nothing worth seeing gets cropped
+	# away or hidden behind the title band.
+	art_w, art_h = book_builder.cover_art_size()
+	art_path = image(sd_prompt, OUTPUT_DIR / f'libro_{stamp}_art.png',
+					 negative_prompt='text, watermark, signature, people, faces, blurry',
+					 width=art_w, height=art_h)
+	print(f'ilustracion guardada: {art_path}')
+
+	# Same chapters through the real book pipeline: cover PNG + A5 PDF with
+	# intro, index and page numbers. parse_chapters keys off the "# Capítulo N:"
+	# headings added above, so the text goes in as-is.
+	cover_path = book_builder.build_cover_image(user_name, OUTPUT_DIR / f'libro_{stamp}_cover.png',
+												background_path=art_path)
+	pdf_path = book_builder.build_pdf(user_name, '\n\n'.join(capitulos), cover_path,
+									  OUTPUT_DIR / f'libro_{stamp}.pdf')
+	print(f'pdf guardado: {pdf_path}  (portada: {cover_path})')
 	print("--- %s seconds ---" % (time.time() - start_time))
 	print("")
