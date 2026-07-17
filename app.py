@@ -444,8 +444,10 @@ def _planning_paths(session_id: str) -> list[Path]:
     _perfil.md is a profile of the person written from it."""
     return [
         OUTPUT_FOLDER / f'{session_id}_prompt.md',
+        # 'databank' is the current chain's mirror; 'sinopsis' is the old chain's
+        # — kept in the list so any pre-existing mirror still gets purged.
         *(OUTPUT_FOLDER / f'{session_id}_{name}.md' for name in
-          ('perfil', 'sinopsis', 'outline', 'capitulos', 'portada')),
+          ('perfil', 'databank', 'sinopsis', 'outline', 'capitulos', 'portada')),
         art_path(session_id),
     ]
 
@@ -540,14 +542,26 @@ def _run_book_generation(session_id: str, state: dict, data: dict) -> None:
                 # exists) — kept in memory only; the SSE loop forwards changes.
                 with _book_lock:
                     state['progress'] = event
+        # Finalize before flipping the status to 'done'. 'done' is what unlocks
+        # /book/download and ends the SSE stream, so the reader can act the
+        # instant it flips — everything the finished book needs must already be
+        # in place. Doing this after 'done' would race the reader's own click.
         with _book_lock:
-            state['status'] = 'done'
             state['progress'] = None
-        _book_done_marker(session_id).touch()
         # The book exists, so the activity that fed it has no further use.
         # Meta first: it's what lets the rest go without breaking download.
         _save_session_meta(session_id, data)
+        # Bake the SD art into the cover BEFORE the purge deletes it — the art
+        # is the source we're consuming. Best-effort: a failed cover falls back
+        # to the blank template and must not fail the finished book.
+        try:
+            _ensure_cover(session_id, get_user_name(data))
+        except Exception:
+            app.logger.exception('cover build failed for session %s', session_id)
         _purge_session_source(session_id)
+        _book_done_marker(session_id).touch()
+        with _book_lock:
+            state['status'] = 'done'
     except EngineUnavailable as e:
         # Expected enough to not be worth a stack trace: the box is off, busy,
         # or its model got ejected. Logged as a warning so it stays greppable.
@@ -827,17 +841,28 @@ def _session_user_name(session_id: str) -> str:
     return get_user_name(data)
 
 
-def _ensure_book_artifacts(session_id: str, user_name: str) -> tuple[Path, Path]:
-    """Build (once) the cover PNG and PDF for a finished session."""
+def _ensure_cover(session_id: str, user_name: str) -> Path:
+    """Composite the cover PNG once, baking in the SD art while it still exists.
+
+    This has to run before the art is purged (it's the source we're consuming),
+    which is why it's split out from _ensure_book_artifacts and also called at
+    generation-finish. Once the art is folded into this PNG the raw art can go;
+    the cover is what everything downstream reads. Missing art just means the
+    drawing server was down — the cover keeps its blank template.
+    """
     cover_path = _cover_path(session_id)
-    pdf_path = _pdf_path(session_id)
     if not cover_path.exists():
-        # The art is drawn during generation; it's missing only if the drawing
-        # server was down, in which case the cover keeps its blank template.
         art = art_path(session_id)
         book_builder.build_cover_image(
             user_name, cover_path,
             background_path=art if art.exists() else None)
+    return cover_path
+
+
+def _ensure_book_artifacts(session_id: str, user_name: str) -> tuple[Path, Path]:
+    """Build (once) the cover PNG and PDF for a finished session."""
+    cover_path = _ensure_cover(session_id, user_name)
+    pdf_path = _pdf_path(session_id)
     if not pdf_path.exists():
         state = _load_book_state(session_id)
         with _book_lock:

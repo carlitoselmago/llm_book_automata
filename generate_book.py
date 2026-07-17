@@ -27,7 +27,8 @@ re-prompted on its own:
 
     md = generate_book.build_user_description(generate_book.load_session(path))
     perfil = generate_book.extract_profile(md)
-    sinopsis = generate_book.generate_synopsis(perfil)
+    data_bank = generate_book.reduce_data_bank(generate_book.mine_data_bank(md))
+    outline = generate_book.generate_outline("Ada Lovelace", perfil, data_bank)
 
 Two models do the work, because they're good at different things: a small
 instruct model plans (PLANNING_MODEL) and an uncensored writer model writes
@@ -90,10 +91,10 @@ SD_TIMEOUT = (10, None)
 
 NUM_CHAPTERS = 10
 
-# Preparation steps, in order: profile, synopsis, outline, one per chapter spec,
-# art prompt, art. Derived rather than written down, so it stays true if the
-# chain grows a phase.
-PREP_TOTAL = 3 + NUM_CHAPTERS + 2
+# Preparation steps, in order: profile, mine details, reduce details, outline,
+# one per chapter spec, art prompt, art. Derived rather than written down, so it
+# stays true if the chain grows a phase.
+PREP_TOTAL = 4 + NUM_CHAPTERS + 2
 
 # How much activity data to put in the prompt. A processed session can hold
 # hundreds of items per service, which would blow past a local model's context
@@ -452,242 +453,187 @@ def art_path(session_id: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Preparation, phase 1 — mine the activity dump for narrative material.
+# Preparation, phase 1 — read the person out of the activity dump.
+#
+# Three writing-model calls, on purpose: the profile and the detail-mining want
+# the uncensored writer's voice, not the planning model's. profile() paints who
+# they are; mine_data_bank() hunts the specific, weird, quotable details; and
+# reduce_data_bank() consolidates those to a single sampleable set for the
+# outline. Ported from the chain proven out in lm_dev.py's __main__.
 # ---------------------------------------------------------------------------
 
-PROFILE_PROMPT = """
+def _profile_prompt(data_md: str) -> str:
+    return f"""
 
-The contents of the markdown file are part of the context of this conversation. Use them as your primary source of information throughout the task. Do not ask for the file again. If any information is missing from the markdown, continue using only the available data. Never invent, hallucinate, or infer unsupported facts.
+You are a sarcastic, needling profiler-for-hire — think a nosy detective who's seen too much and finds people's digital footprints hilarious, not clinical. You are NOT a marketing analyst and NOT a therapist. Never sound reassuring, clinical, or neutral.
 
-You are a data extraction and narrative research assistant.
+<data>
+{data_md}
+</data>
 
-# Task
+STEP 1 — SCAN (internal, do not output):
+Skim the ENTIRE file. Note at least 3 surprising or contradictory data points that occur OUTSIDE the first third of the file. You must use at least one of these in the final profile.
 
-Read the provided markdown file containing Google activity from one user. Each "## " heading is a Google service (Books, Flights, Maps, Search, Shopping, Video Search, YouTube, Chrome, Gemini and others) and each "- " bullet under it is one activity entry.
+STEP 2 — WRITE the Character Profile with these sections:
+- Name/Age/Gender (only if explicit in data; otherwise write "Unconfirmed, but acts like a [guess]")
+- Hobbies & Interests: derived from Chrome/Search data. Pick the WEIRDEST juxtaposition of two interests, not the most obvious one.
+- Fears, Insecurities, Desires: derived from searches. State them as if you caught the person red-handed, not like a diagnosis.
+- Personality (via YouTube data): one sharp, backhanded observation, not a list of traits.
 
-Extract only information useful for building a fictional character and world. The goal is not to summarize the user's life, but to preserve concrete narrative references that can later be reused in a novel.
+STYLE RULES (violating any of these is a failure):
+- Never use: "seems to", "this suggests", "appears to be", "seemingly", "seems interested in"
+- Every section needs at least one joke built on IRONY or CONTRAST (what they search for vs. what they claim to want), not just a funny adjective.
+- Address the reader/subject in second person at least once ("you", not "the user")
+- Max 2 sentences per section. Brevity forces sharper writing.
 
-# Processing instructions
+EXAMPLE (tone reference only, don't reuse content):
+"Hobbies: Seventeen tabs on ergonomic keyboards, zero purchases in 8 months. You've optimized your search history for a desk setup you'll never buy."
 
-1. Inspect the entire markdown, including nested gemini and ai conversations, search queries, google map locations, books, videos search, youtube historial any textual field.
-2. Focus on AI Mode and Gemini to extract relevant information about the
-2. Preserve exact names whenever possible.
-3. Prefer concrete references over abstract summaries.
-4. Write different data in the different categories, do not repeat.
-6. Output only the final information.
-
-# Evidence rule
-
-Every interpretation must be immediately supported by evidence extracted from the markdown.
-
-Use this format:
-- **Observation:** interpretative narrative observation.
-- **Evidence:** exact searches, conversations, titles, places, books, videos, products or other entries found in the markdown.
-# Required output
-
-# 1. User Profile
-Include only explicit information when available:
-- Name
-- Approximate age (only if explicit)
-- Gender (only if explicit)
-- Occupation or studies
-- Fears, Desires and Goals
-- Character and personality
-Then write a short narrative description based on the data.
----
-# 2. People
-List all named people found in the data.
-Include:
-- Family members
-- Friends
-- Authors
-- Artists
-- Public figures
-- Any other named individual
----
-# 3. Places
-List every concrete location with narrative value.
-Examples include:
-- Countries
-- Cities
-- Neighbourhoods
-- Streets
-- Hotels
-- Restaurants
-- Cafés
-- Museums
-- Shops
-- Parks
-- Mountains
-- Beaches
-- Any specifically named place
----
-# 5. Interests and Hobbies
-Extract specific interests.
-Avoid generic labels such as "technology" or "travel".
-Prefer concrete topics.
----
-# 6. Cultural References
-List concrete references including:
-- Books
-- Authors
-- Films
-- TV series
-- Music
-Preserve exact titles whenever possible.
----
-# 7. Activities and Experiences
-Extract activities actually performed, planned or repeatedly searched.
-Examples:
-- Trips
-- Shopping
-- Reading
-- Cooking
-- Hiking
-- Gaming
-- Sporting activities
-- Museum visits
-Focus on concrete activities rather than broad lifestyle descriptions.
----
-# 8. Conversations, Searches and Ideas
-This is very importante and priority.
-Summarise conversations with Gemini and IA Mode together with important searches.
-Identify and extract
-- Fears
-- Desires
-- Personal projects
-- Ideas
-Group related entries into themes.
----
-# 9. Narrative Threads
-Select the unique and reusable references in the entire dataset.
-These details should make the fictional character feel unique rather than generic.
-# Final quality checklist
-Before producing the answer, internally verify that:
-- The compelte JSON section was inspected.
-- AI Mode and Gemini received the greatest attention.
-- Proper names were preserved.
-- Concrete references were prioritised over summaries.
-- Technical metadata was omitted.
-- All sections were completed whenever data existed.
-Return only the final information.
-
-
+Now write the profile.
 """
 
 
-def extract_profile(user_description: str) -> str:
-    """Turn the raw activity markdown into a narrative profile of the person.
+def extract_profile(data_md: str) -> str:
+    """A sharp, sarcastic character profile of the person behind the activity.
 
-    The description goes in as its own user message rather than pasted into the
-    prompt — that's what "attaching the markdown" means against an API with no
-    file upload, and it keeps the instructions and the data apart.
+    On the writing model rather than the planner: the whole point is the voice,
+    and the planner writes it flat. `data_md` is the sampled activity markdown
+    (build_user_description), inlined into the prompt inside <data> tags so the
+    instructions and the data stay visibly apart.
     """
-    return chat([
-        {"role": "user", "content": PROFILE_PROMPT},
-        {"role": "user", "content": user_description},
-    ])
+    return chat(_profile_prompt(data_md), model=WRITING_MODEL)
+
+
+def _data_bank_prompt(data_md: str) -> str:
+    return f"""
+
+You are mining a Google Takeout export for the WEIRDEST, most specific, most narratively unusable-in-a-boring-way details about this person. You are not summarizing their life. You are hunting for the 20 details a novelist would actually want.
+
+<data_chunk>
+{data_md}
+</data_chunk>
+
+WHAT COUNTS AS GOOD (extract these):
+- A specific, oddly-phrased search query, verbatim
+- A contradiction: e.g. searches for "minimalism" right next to 40 shopping tabs
+- A repeated, obsessive pattern (same search 8 times in different phrasings)
+- A specific brand, place, or product name — never a category
+- Something searched at a weird hour, or right after/before something else revealing
+- A YouTube video/channel that clashes with their stated interests elsewhere
+
+WHAT COUNTS AS BAD (never extract these):
+- "Frequently searches for recipes"
+- "Interested in technology"
+- "Watches a variety of YouTube content"
+- Anything you could write without looking at the actual data
+
+For each item found, output:
+{{
+  "item": "<verbatim or near-verbatim detail>",
+  "category": "search | youtube | maps | purchase | other",
+  "weirdness_score": 1-10,
+  "why": "<one sentence on what makes this usable — irony, contradiction, specificity, obsession>"
+}}
+
+Return 15-20 items as a JSON array, sorted by weirdness_score descending. If the chunk is mostly mundane, it is fine to return fewer — do not pad with weak items to hit a count.
+"""
+
+
+def mine_data_bank(data_md: str) -> str:
+    """Pull 15-20 specific, quotable, weird details out of the activity, as JSON."""
+    return chat(_data_bank_prompt(data_md), model=WRITING_MODEL)
+
+
+def _reduce_data_bank_prompt(candidates: str) -> str:
+    return f"""
+Below are candidate details pulled from different chunks of one person's Google data. Merge, deduplicate near-identical items, and select the FINAL 25 that would make the best material for a comedic/dramatic character profile.
+
+Prioritize:
+- Items that contradict each other (great narrative tension)
+- Items that are absurdly specific (brand names, exact phrasing)
+- A spread across categories — don't let one obsessive search pattern eat all 25 slots
+
+<candidates>
+{candidates}
+</candidates>
+
+Return the final 25 as JSON, same schema, ready to be sampled from in the next generation step.
+"""
+
+
+def reduce_data_bank(candidates: str) -> str:
+    """Consolidate the mined candidates to a final, deduplicated 25 (JSON)."""
+    return chat(_reduce_data_bank_prompt(candidates), model=WRITING_MODEL)
 
 
 # ---------------------------------------------------------------------------
-# Preparation, phase 2 — the story: synopsis, then a 10-chapter outline, then
-# one spec per chapter pulled back out of it.
+# Preparation, phase 2 — the story: a full JSON outline, then one chapter's
+# spec pulled back out of it per chapter.
 # ---------------------------------------------------------------------------
 
-def _synopsis_prompt(profile: str) -> str:
+def _outline_prompt(user_name: str, profile: str, data_bank: str) -> str:
+    first = user_name.split()[0] if user_name.split() else user_name
     return f"""
+	Based on the information below about {user_name}, create a detailed {NUM_CHAPTERS}-chapter outline for a personalized Harry Potter novel where {first} is the protagonist.
 
-		TEXT:
+	Harry Potter must meet the protagonist early and reveal they are a witch/wizard. Build the main plot around one of the protagonist's most distinctive interests, fears, or guessed obsessions from their data. Include sustained bisexual romantic tension with established male and female Harry Potter characters — crushes, jealousy, longing, misunderstandings, embarrassment.
 
-		{profile}
+	CRITICAL STYLE RULE — DO NOT SMOOTH THIS OVER:
+	Real-world personal data must NOT blend naturally into the wizarding world. It should feel like an intrusion — jarring, oddly specific, almost like the universe itself is glitching to accommodate {first}'s real habits. A wand shop clerk should not vaguely gesture at "modern tastes" — he should hold up a wand and say it "smells faintly of [SPECIFIC BRAND/PLACE FROM DATA]." The weirder and more forced the collision feels, the better. If a detail could be swapped for a generic placeholder and the sentence would still work, it's not specific enough — use a sharper one.
 
-		Based on the information provided in this previous text, write a synopsis for a personalized Harry Potter novel. Use the information as the only source for the protagonist's profile. Do not invent new biographical details beyond what is explicitly supported.
+	OUTPUT FORMAT — this is critical, follow it exactly:
+	Return ONLY a single JSON array, no preamble, no markdown code fences, no commentary before or after. One object per chapter, in this exact shape:
 
-	Requirements:
+	[
+	{{
+		"chapter_number": 1,
+		"chapter_title": "string",
+		"plot_summary": "150-word detailed summary of what happens",
+		"narrative_function": "two-word phrase describing the chapter's purpose",
+		"data_intrusions": {{
+		"setting": "a real place/brand/habit from the data, planted into a wizarding-world location or object, described as if completely normal",
+		"dialogue": "a full line of dialogue from a Harry Potter character referencing a specific search query, video, or app from the data — verbatim or near-verbatim, delivered totally straight-faced",
+		"conflict": "a plot complication that only makes sense because of a specific real-world fear, obsession, or contradiction found in the data",
+		"romance": "a moment of romantic tension where the object of affection reacts to or is confused by a real personal detail/habit of the protagonist"
+		}}
+	}},
+	... ({NUM_CHAPTERS - 1} more objects, chapter_number 2 through {NUM_CHAPTERS})
+	]
 
-	- The protagonist is the person described in the provided information.
-	- Create a title with the formula "Harry Potter and [protagonist's name]".
-	- Harry Potter meets the protagonist early in the story.
-	- At a key moment, Harry reveals that the protagonist is a witch or wizard and invites them into the wizarding world.
-	- The central emotional thread of the story should be romance, attraction and unresolved romantic tension with several carachters
-	- The protagonist should develop meaningful romantic chemistry with several established Harry Potter characters, including both male and female characters. The relationships may involve mutual attraction, jealousy, longing, rivalry, emotional intimacy, misunderstandings and slow-burn romance.
-	- The tone of these relationships should be inspired by the emotional style of popular Harry Potter fanfiction, with bisexual romantic tension, complicated feelings and evolving relationships, while remaining compatible with the tone of the original series.
-	- Build the main external conflict around one important narrative thread, interest, activity or goal extracted from the protagonist's profile.
-	- Naturally incorporate many concrete references from the profile (people, places, objects, books, hobbies, trips, videos, projects, etc.).
-	- Include well-known Harry Potter characters such as Dumbledore, Hagrid, McGonagall and others where appropriate.
-	- Write only a synopsis (200–300 words), not the full novel.
+	Book title (include as a top-level field "book_title" alongside the chapters array — restructure the whole return as {{"book_title": "Harry Potter and {user_name}", "chapters": [...]}}):
+
+	{profile}
+
+	User data:
+	{data_bank}
+
+	Note: Don't make it dull or generic. Comedy comes from precision, not vagueness — always choose the specific brand, exact phrase, or named place over a general description. Let it be a little uncomfortable that the story knows this much.
+
+	Remember: output must be valid JSON only. No markdown fences, no explanation, nothing outside the JSON object.
 	"""
 
 
-def generate_synopsis(profile: str) -> str:
-    """A 200–300 word pitch for the novel, built only from the profile."""
-    return chat(_synopsis_prompt(profile))
-
-
-def _outline_prompt(text: str) -> str:
-    return f"""
-	TEXT:
-
-		{text}
-
-	The information provided in the text consists of:
-
-	1. A narrative profile of the protagonist extracted from real Google activity.
-	2. A story synopsis for a personalized Harry Potter novel.
-
-	Use both as the only source of information.
-
-	Your task is to expand the synopsis into a detailed outline of **{NUM_CHAPTERS} chapters**.
-
-	Requirements:
-
-	- Follow and develop the synopsis faithfully.
-	- Each chapter must contain:
-	  - A chapter title.
-	  - A 200 word summary describing the events.
-	- Narrative purposeof the chapter (one short sentence explaining why this chapter exists in the overall story, e.g. introducing a character, raising the stakes, revealing new information, strengthening relationships, creating a setback, preparing the climax, resolving a subplot, etc.)
-	 - The Harry Potter characters involved.
-	- The profile references incorporated.
-
-	- Every chapter should naturally incorporate **3–5 concrete references** from the protagonist's profile.
-	- Across the entire outline, ensure that references from all profile categories (People, Places, Objects, Interests, Cultural references, Activities, Conversations and ideas) are represented.
-	- Introduce new references throughout the novel so that most of the protagonist's profile is eventually incorporated.
-	- Every reference listed must appear naturally in the chapter summary and contribute to the plot, dialogue, setting, relationships or conflict. Do not list references that are not actually used in the chapter.
-	- Prioritize specific references over generic concepts.
-	- Spread the references across the entire outline. Introduce new references in every chapter and avoid repeatedly relying on the same small set of references.
-
-	- Romantic relationships should be one of the main driving forces of the narrative. Draw inspiration from the emotional style of popular Harry Potter fanfiction, emphasizing slow-burn attraction, unresolved romantic tension, jealousy, longing, emotional vulnerability, misunderstandings, rivalries, secret affections and evolving relationships.
-	- The protagonist should develop meaningful romantic chemistry with several main Harry Potter characters of different genders, creating overlapping attractions, uncertainty, emotional conflicts and shifting loyalties. The overall tone should naturally include both heterosexual and homoerotic romantic tension.
-	- Ensure that the romantic plot evolves throughout the ten chapters, with feelings gradually intensifying and influencing the main adventure instead of remaining a secondary subplot.
-	- Include private intimate moments that deepen relationships and reveal character development.
-
-	- Build a clear narrative progression, escalating conflict and a satisfying character arc across the ten chapters.
-
-	Return only the outline.
-
-	"""
-
-
-def generate_outline(text: str) -> str:
-    """The whole book's chapter outline, as one blob of text."""
-    return chat(_outline_prompt(text))
+def generate_outline(user_name: str, profile: str, data_bank: str) -> str:
+    """The whole book as one JSON outline: book_title + a spec per chapter."""
+    return chat(_outline_prompt(user_name, profile, data_bank))
 
 
 def _chapter_outline_prompt(outline: str, index: int) -> str:
     return f"""
-		Extract the especific text tat describes the info in the chapter #{index}, only that, no further explanation:
+	Extract the especific text tat describes the info in the chapter #{index}, only that, keep the json formating as is, no further explanation:
 
-		Chapters:
-		{outline}
-	"""
+	Chapters:
+	{outline}
+"""
 
 
 def extract_chapter_outline(outline: str, index: int) -> str:
-    """Pull chapter `index`'s spec back out of the outline blob (1-based).
+    """Pull chapter `index`'s spec back out of the outline JSON (1-based).
 
-    A model call rather than a regex on purpose: the outline's shape is whatever
-    the model felt like emitting that run, so there's no heading format to split
-    on reliably.
+    A model call rather than JSON parsing on purpose: the outline is whatever
+    the model actually emitted that run — it may not be valid JSON, or may be
+    wrapped in prose — so asking for one chapter's slice is more robust than
+    indexing a structure that might not exist.
     """
     return chat(_chapter_outline_prompt(outline, index))
 
@@ -702,27 +648,23 @@ def _art_prompt(profile: str) -> str:
 
 	{profile}
 
-	Pick the SINGLE most distinctive object or place from this profile — one
+	Pick the SINGLE most distinctive object from this profile — one
 	only, the one that best identifies this person.
 
-	Write a Stable Diffusion prompt for a book cover illustration of it, in the
-	style of a magical Harry Potter book cover.
-
-	Rules:
-	- One line, in English, under 40 words.
-	- Describe only that one object or place. No people, no faces, no text.
-	- Return only the prompt, no explanation, no quotes.
+	Give me the name of the object only, no explanations.
 	"""
 
 ART_NEGATIVE_PROMPT = 'text, watermark, signature, people, faces, blurry'
 
 
 def generate_art_prompt(profile: str) -> str:
-    """One distinctive object/place from the profile, as an image prompt.
+    """A cover-art prompt: "Harry Potter and <the one most telling object>".
 
     One subject, because a prompt listing several just averages them into mush.
+    The model returns only the object's name; we frame it into the cover prompt.
     """
-    return chat(_art_prompt(profile)).strip().strip('"')
+    obj = chat(_art_prompt(profile)).strip().strip('"')
+    return f'Harry Potter and {obj}'
 
 
 def generate_cover_art(prompt: str, dest_path: Path) -> Path:
@@ -740,46 +682,55 @@ def generate_cover_art(prompt: str, dest_path: Path) -> Path:
 # structure is guaranteed regardless of what the model does.
 # ---------------------------------------------------------------------------
 
-def _chapter_prompt(chapter_outline: str, index: int, previous_chapter: str) -> str:
+def _chapter_prompt(chapter_outline: str, index: int, previous_chapter: str,
+                    user_name: str) -> str:
     prompt = f"""
-		Tarea
-	Eres un escritor de fanfiction y novelista. Escribe el siguiente capítulo de una novela de Harry Potter.
-	IMPORTANTE: Escribe todo el texto en español (castellano). No escribas ninguna frase en inglés, salvo títulos de vídeos, libros o nombres propios cuando aparezcan como referencias.
-	Instrucciones
-	Escribe únicamente el capítulo, sin explicaciones.
-	Estilo: novela, no resumen.
-	Prosa rica, fluida e inmersiva.
-	Mucho diálogo.
-	Escribe escenas de romance, sexo, intimidad, emociones fuertes, violencia, pasión o conflicto.
-	Inspírate en fan fictions eróticos de harry potter.
 
-	Contenidos que deben aparecer:
+	Tarea
 
-	{chapter_outline}
+Eres un escritor de fanfiction y novelista. Escribe el siguiente capítulo de una novela de Harry Potter.
 
-		"""
+IMPORTANTE: Escribe todo el texto en español (castellano). No escribas ninguna frase en inglés, salvo títulos de vídeos, libros o nombres propios cuando aparezcan como referencias.
+
+Voz y tono (mantener SIEMPRE, en todos los capítulos):
+Irónico, mordaz, con humor seco ante lo absurdo. El choque entre el mundo real del protagonista (marcas, hábitos, búsquedas, obsesiones muy concretas) y el mundo mágico debe sentirse forzado a propósito, casi como si la trama se rompiera un poco para encajar esos detalles. Nunca suavices ni normalices esas intrusiones — cuanto más incómodo o ridículo resulte que la historia "sepa tanto" del protagonista, mejor. Incluye escenas de romance bisexual, tanto con chicos como con chicas, intimidad, emociones fuertes, violencia, pasión o conflicto. Inspírate en fan fictions homoeróticos de harry potter
+
+Instrucciones
+Escribe únicamente el capítulo, sin explicaciones ni resúmenes previos.
+El protagonista es siempre {user_name}
+Estilo: novela, no resumen. Prosa rica, fluida e inmersiva. Mucho diálogo.
+Incluye conflicto, tensión narrativa, emociones fuertes y momentos de humor o vergüenza ajena.
+Los cuatro elementos de intrusión de datos (setting, diálogo, conflicto, y el que corresponda) deben aparecer de forma literal y reconocible, no diluidos ni generalizados.
+
+Contenidos que deben aparecer:
+
+{chapter_outline}
+
+"""
 
     if previous_chapter:
         prompt += f"""
 
-			Capítulo anterior para contexto:
-			{previous_chapter}
-		"""
+	Capítulo anterior para contexto:
+	{previous_chapter}
+	"""
 
     prompt += """
-		Escribe:
-		"""
+Escribe:
+"""
     return prompt
 
 
-def iter_chapter(chapter_outline: str, index: int, previous_chapter: str):
+def iter_chapter(chapter_outline: str, index: int, previous_chapter: str,
+                 user_name: str):
     """Yield the chapter as text: a markdown heading, then streamed prose.
 
     Only the previous chapter is passed for continuity, not the book so far —
     that keeps the prompt bounded no matter how long the book runs.
     """
     yield f"# Capítulo {index}:\n\n"
-    yield from stream_chat(_chapter_prompt(chapter_outline, index, previous_chapter))
+    yield from stream_chat(
+        _chapter_prompt(chapter_outline, index, previous_chapter, user_name))
 
 
 # ---------------------------------------------------------------------------
@@ -822,6 +773,7 @@ def iter_book_events(source):
     """Generate the book from a JSON file path (or data dict); yield events."""
     data = load_session(source)
     session_id = data.get('session_id')
+    user_name = get_user_name(data)
     user_description = build_user_description(data)
     _save_prompt(data, user_description)
 
@@ -847,12 +799,15 @@ def iter_book_events(source):
     perfil = extract_profile(user_description)
     _save_planning(session_id, 'perfil', perfil)
 
-    yield prep('Preparando la trama')
-    sinopsis = generate_synopsis(perfil)
-    _save_planning(session_id, 'sinopsis', sinopsis)
+    yield prep('Buscando los detalles más reveladores')
+    candidates = mine_data_bank(user_description)
 
-    yield prep('Repartiendo la historia en capítulos')
-    outline = generate_outline(sinopsis)
+    yield prep('Destilando lo más jugoso')
+    data_bank = reduce_data_bank(candidates)
+    _save_planning(session_id, 'databank', data_bank)
+
+    yield prep('Tramando la historia')
+    outline = generate_outline(user_name, perfil, data_bank)
     _save_planning(session_id, 'outline', outline)
 
     chapter_outlines = []
@@ -891,7 +846,7 @@ def iter_book_events(source):
             'label': f'Escribiendo capítulo {i} de {total}',
         }
         chapter_text = ''
-        for delta in iter_chapter(chapter_outline, i, previous_chapter):
+        for delta in iter_chapter(chapter_outline, i, previous_chapter, user_name):
             chapter_text += delta
             yield {'type': 'content', 'text': delta}
         # Guarantee separation between chapters.
