@@ -721,6 +721,88 @@ Escribe:
     return prompt
 
 
+# We emit the "# Capítulo N:" heading ourselves (so the index and the PDF's
+# chapter splitting are guaranteed), but the writer often opens the prose by
+# repeating it — "## Capítulo 1", "**Capítulo 1**", "Capítulo 1: título" — and
+# then the number shows up twice, in the text and in the index. This matches
+# that leading label so we can drop it. Only the number label: a title the model
+# invents on its own ("**Un despertar**", "# El bosque") has no "capítulo"/
+# number and is left alone.
+_CHAPTER_LABEL_RE = re.compile(
+    r'^\s*(?:'
+    r'[#>]+\s*\**\s*(?:cap[íi]tulo|chapter)\b'            # "## Capítulo 1", "> Chapter 2"
+    r'|\*+\s*(?:cap[íi]tulo|chapter)\b'                   # "**Capítulo 1**"
+    r'|(?:cap[íi]tulo|chapter)\s+(?:\d+|[ivxlcdm]+)\b'    # "Capítulo 3", "Chapter IV"
+    r')',
+    re.IGNORECASE,
+)
+# Stop hunting for a label once this many chars have arrived without a line
+# break: a real chapter label is a short line of its own, so anything longer is
+# already prose and must be streamed, not held back.
+_LABEL_SCAN_LIMIT = 120
+
+
+def _could_be_chapter_label(partial_line: str) -> bool:
+    """Could this partial (newline-less) line still grow into a chapter label?
+
+    True while we can't yet rule it out — an empty run of markers, or a prefix
+    of / start of "capítulo"/"chapter" — so the caller keeps buffering. False
+    the moment it diverges, so real prose is released without waiting for a
+    newline that a one-line-less chapter might never send.
+    """
+    core = partial_line.lstrip('#>*_ \t').lower()
+    if core == '':
+        return True
+    return any(w.startswith(core) or core.startswith(w)
+               for w in ('capítulo', 'capitulo', 'chapter'))
+
+
+def _consume_leading_labels(buffer: str):
+    """Strip leading blank lines and chapter-label lines off `buffer`.
+
+    Returns (remaining, resolved). resolved=True once the head is real content —
+    a complete non-label line has begun, or a partial that can't be a label.
+    resolved=False means "need more input to decide".
+    """
+    while True:
+        buffer = buffer.lstrip('\n')
+        nl = buffer.find('\n')
+        if nl == -1:
+            return buffer, bool(buffer) and not _could_be_chapter_label(buffer)
+        if not _CHAPTER_LABEL_RE.match(buffer[:nl]):
+            return buffer, True
+        buffer = buffer[nl + 1:]  # drop the label line, then look again
+
+
+def _strip_leading_chapter_label(chunks):
+    """Stream `chunks`, dropping a leading chapter-number label line if present.
+
+    Buffers only the chapter's opening — through any leading blank and label
+    lines until real content appears, or a short cap for a chapter that opens
+    with one long unbroken sentence — then passes everything else through
+    untouched, so it costs nothing past the first line. `iter(chunks)` up front,
+    then `yield from` the same iterator, so a chunk is never consumed twice.
+    """
+    it = iter(chunks)
+    buffer = ''
+    resolved = False
+    for chunk in it:
+        buffer += chunk
+        buffer, resolved = _consume_leading_labels(buffer)
+        if resolved or len(buffer) > _LABEL_SCAN_LIMIT:
+            break
+    if not resolved:
+        # The stream ended (or hit the cap) still undecided — a chapter that is
+        # nothing but its label, no prose after. Treat end-of-input as
+        # end-of-line: if what's left is itself just a label, drop it.
+        buffer = buffer.lstrip('\n')
+        if '\n' not in buffer and _CHAPTER_LABEL_RE.match(buffer):
+            buffer = ''
+    if buffer:
+        yield buffer
+    yield from it
+
+
 def iter_chapter(chapter_outline: str, index: int, previous_chapter: str,
                  user_name: str):
     """Yield the chapter as text: a markdown heading, then streamed prose.
@@ -729,8 +811,8 @@ def iter_chapter(chapter_outline: str, index: int, previous_chapter: str,
     that keeps the prompt bounded no matter how long the book runs.
     """
     yield f"# Capítulo {index}:\n\n"
-    yield from stream_chat(
-        _chapter_prompt(chapter_outline, index, previous_chapter, user_name))
+    yield from _strip_leading_chapter_label(stream_chat(
+        _chapter_prompt(chapter_outline, index, previous_chapter, user_name)))
 
 
 # ---------------------------------------------------------------------------
@@ -802,7 +884,7 @@ def iter_book_events(source):
     yield prep('Buscando los detalles más reveladores')
     candidates = mine_data_bank(user_description)
 
-    yield prep('Destilando lo más jugoso')
+    yield prep('Analizando tus obsesioness')
     data_bank = reduce_data_bank(candidates)
     _save_planning(session_id, 'databank', data_bank)
 
