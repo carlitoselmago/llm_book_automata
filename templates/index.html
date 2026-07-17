@@ -43,6 +43,15 @@
     <h2>Paso 2: Elige tus datos</h2>
     <p id="result-msg"></p>
     <div id="services-list"></div>
+
+    <!-- Shown when the writing engine is down: checked before generating, and
+         again if a run dies mid-way. Lives outside step 3 because it's the
+         reason step 3 can't start. -->
+    <div id="engine-error" style="display:none; margin: 1em 0;">
+      <p id="engine-error-msg" style="color: red;"></p>
+      <button type="button" id="engine-retry-btn">Comprobar de nuevo</button>
+    </div>
+
     <button type="button" id="generate-btn">Generar libro</button>
   </section>
 

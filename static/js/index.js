@@ -14,6 +14,15 @@ $(function () {
   const $errorArea = $('#error-area');
   const $errorMsg = $('#error-msg');
   const $generateBtn = $('#generate-btn');
+  const $engineError = $('#engine-error');
+  const $engineErrorMsg = $('#engine-error-msg');
+  const $engineRetryBtn = $('#engine-retry-btn');
+
+  // Fallback only — normally the server sends the wording, so it stays in one
+  // place. This is for when our own server is what's unreachable.
+  const ENGINE_DOWN_TEXT =
+    'El motor de escritura no está disponible en este momento. ' +
+    'Inténtalo de nuevo en unos minutos.';
   const $bookArea = $('#section-step-3');
   const $bookContent = $('#book-content');
   const $tocList = $('#book-toc-list');
@@ -98,6 +107,53 @@ $(function () {
     $errorArea.show();
   }
 
+  // --- writing engine availability -----------------------------------------
+  // The LLM runs on a separate box that isn't always up, and writes one book
+  // at a time — so it can also be busy with someone else's. Rather than let the
+  // reader start a ten-minute generation that dies on step 4, ask first — and
+  // say so plainly if a run dies anyway. The server picks the wording for each
+  // case; this banner just shows it, with a button to ask again.
+
+  // Both of these leave the generate button alone: the banner reports what we
+  // knew a moment ago, and "busy" or "down" both stop being true on their own.
+  // Disabling the button would make the reader's obvious move — press it
+  // again — do nothing at all, with no hint that the retry button is the only
+  // live one. Pressing generate re-checks and either starts or says why not.
+  function showEngineError(msg) {
+    $engineErrorMsg.text(msg || ENGINE_DOWN_TEXT);
+    $engineError.show();
+  }
+
+  function hideEngineError() {
+    $engineError.hide();
+  }
+
+  // Resolves to true/false — never rejects, so a caller can just branch on it.
+  function checkEngine() {
+    return $.get('/engine/status')
+      .then(function (data) {
+        if (data.available) {
+          hideEngineError();
+          return true;
+        }
+        showEngineError(data.message);
+        return false;
+      })
+      .catch(function () {
+        // Our own server is unreachable, not the engine. Same dead end for the
+        // reader, so same message.
+        showEngineError(ENGINE_DOWN_TEXT);
+        return false;
+      });
+  }
+
+  $engineRetryBtn.on('click', function () {
+    $engineRetryBtn.prop('disabled', true);
+    checkEngine().always(function () {
+      $engineRetryBtn.prop('disabled', false);
+    });
+  });
+
   function renderUploadResult(data) {
     currentSessionId = data.session_id || currentSessionId;
 
@@ -151,8 +207,26 @@ $(function () {
       if (!this.checked) disabledServices.push(this.value);
     });
 
+    // Only for the length of the check — a second click would fire a second
+    // check, not a second book, but the button shouldn't look live while we're
+    // mid-question either.
     $generateBtn.prop('disabled', true);
 
+    // Ask the engine before committing: a run that starts against a dead or
+    // taken box burns the session (there's no resume) and shows the reader a
+    // failure several minutes in, instead of right now.
+    checkEngine().then(function (ok) {
+      if (!ok) {
+        // showEngineError already said why. Hand the button back so pressing
+        // it again re-asks — by then the other book may well have finished.
+        $generateBtn.prop('disabled', false);
+        return;
+      }
+      startGeneration(disabledServices);
+    });
+  });
+
+  function startGeneration(disabledServices) {
     $.ajax({
       url: '/generate/configure',
       type: 'POST',
@@ -169,13 +243,21 @@ $(function () {
       .fail(function (xhr) {
         $generateBtn.prop('disabled', false);
         let errText = 'Error del servidor.';
+        let errKind = null;
         try {
           const errData = JSON.parse(xhr.responseText);
           errText = errData.error || errText;
+          errKind = errData.error_kind || null;
         } catch (_) {}
-        showError(errText);
+        // Someone else claimed the engine between our check and this call.
+        // Same dead end as an engine that's down, so use the same banner.
+        if (errKind === 'busy') {
+          showEngineError(errText);
+        } else {
+          showError(errText);
+        }
       });
-  });
+  }
 
   // On load, check whether this browser (via cookie) already has a
   // session — resume showing/streaming the book if one is in progress.
@@ -196,14 +278,15 @@ $(function () {
     })
     .fail(function () { /* no previous session — normal first visit */ });
 
-  // Progress banner shown before/between chapters. During the outline phase
-  // (no chapter number yet) the bar is indeterminate; while writing it fills
-  // chapter-by-chapter.
+  // Progress banner shown before and between chapters. Both phases count, so
+  // the bar fills: step-by-step while planning, chapter-by-chapter while
+  // writing. It only goes indeterminate before the first event arrives.
   function showProgress(p) {
     $bookProgress.show();
     $bookProgressLabel.text(p.label || 'Preparando…');
-    if (p.phase === 'writing' && p.total && p.chapter > 0) {
-      $bookProgressBar.attr('max', p.total).attr('value', p.chapter);
+    const done = p.phase === 'prep' ? p.step : p.chapter;
+    if (p.total && done > 0) {
+      $bookProgressBar.attr('max', p.total).attr('value', done);
     } else {
       $bookProgressBar.removeAttr('value'); // indeterminate
     }
@@ -213,11 +296,53 @@ $(function () {
     $bookProgress.hide();
   }
 
+  // --- Following the text as it's written --------------------------------
+  // #book-content is its own scroll box (max-height + overflow-y in
+  // index.less), so the prose scrolls inside it and the page stays put.
+  //
+  // The rule: stick to the bottom while the reader is at the bottom, and get
+  // out of the way the moment they scroll off to read something earlier —
+  // yanking them back mid-sentence is the thing that makes live logs unusable.
+  // Returning to the bottom themselves resumes it.
+
+  const bookContentEl = $bookContent[0];
+  // Sub-pixel rounding and zoom levels mean "at the bottom" is never exactly 0,
+  // and the last line is usually mid-render. A few px of slack absorbs both.
+  const FOLLOW_SLACK_PX = 40;
+  let following = true;
+
+  function atBottom() {
+    return bookContentEl.scrollHeight - bookContentEl.scrollTop -
+      bookContentEl.clientHeight <= FOLLOW_SLACK_PX;
+  }
+
+  // Derived from where the box actually is, rather than tracked as an intent.
+  // That's what makes it symmetric — and it's why followTail() below doesn't
+  // have to suppress this handler: its own scroll lands at the bottom, which
+  // re-arms following, which is exactly right.
+  $bookContent.on('scroll', function () {
+    following = atBottom();
+  });
+
+  function followTail() {
+    if (following) {
+      // Instant, not smooth: a smooth scroll per token never finishes before
+      // the next one restarts it, and the text ends up permanently lagging.
+      bookContentEl.scrollTop = bookContentEl.scrollHeight;
+    }
+  }
+
   function streamBook() {
     let lineBuffer = '';
     let currentParagraph = null;
     let liveLineEl = null;
     let headerCount = 0;
+    let gotAnything = false;
+
+    // A stream always starts by following. On a reconnect the server replays
+    // the whole book so far in one go, and the tail is where the reader left
+    // off — the same place a fresh run starts from.
+    following = true;
 
     // Show something immediately so the page never looks stuck while the
     // first server event (outline planning) is on its way.
@@ -232,9 +357,17 @@ $(function () {
       } catch (err) {
         return;
       }
+      gotAnything = true;
       if (payload.error) {
         hideProgress();
-        showError('Error generando el libro: ' + payload.error);
+        if (payload.error_kind === 'engine') {
+          // Not "something went wrong" — a specific, temporary thing the
+          // reader can wait out. Send them back to the button that starts it.
+          setStep(2);
+          showEngineError(payload.error);
+        } else {
+          showError('Error generando el libro: ' + payload.error);
+        }
         return;
       }
       if (payload.progress) {
@@ -256,6 +389,14 @@ $(function () {
       source.close();
       hideProgress();
       $generateBtn.prop('disabled', false);
+      // Dying before a single event means the stream never opened — the server
+      // refused us (someone beat us to the engine) rather than dropped us
+      // mid-book. EventSource can't show us the reason, so go ask for it, and
+      // put the reader back on the button they'd need to press.
+      if (!gotAnything) {
+        setStep(2);
+        checkEngine();
+      }
     });
 
     function ingestChunk(text) {
@@ -267,6 +408,7 @@ $(function () {
         finalizeLine(line);
       }
       updateLiveLine(lineBuffer);
+      followTail();
     }
 
     function finalizeLine(line) {
