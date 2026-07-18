@@ -699,7 +699,7 @@ Instrucciones
 Escribe únicamente el capítulo, sin explicaciones ni resúmenes previos.
 El protagonista es siempre {user_name}
 Estilo: novela, no resumen. Prosa rica, fluida e inmersiva. Mucho diálogo.
-Incluye conflicto, tensión narrativa, emociones fuertes y momentos de humor o vergüenza ajena.
+Incluye conflicto, tensión narrativa, emociones fuertes y momentos de humor o vergüenza ajena y siempre con contenido romántico ni íntimo.
 Los cuatro elementos de intrusión de datos (setting, diálogo, conflicto, y el que corresponda) deben aparecer de forma literal y reconocible, no diluidos ni generalizados.
 
 Contenidos que deben aparecer:
