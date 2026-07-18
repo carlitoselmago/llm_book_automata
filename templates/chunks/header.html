@@ -15,4 +15,14 @@
 </head>
 <body>
 
-  <h1 id="logo"><img src="{{ url_for('static', filename='img/logo.png') }}" alt="Harry Potter y tu"></h1>
+<header>
+  <img src="{{ url_for('static', filename='img/header.jpg') }}" alt="Harry Potter y tu">
+</header>
+<nav class="menu">
+  
+   <a class="" href="{{ url_for('home') }}">Inicio</a>
+      <a class="" href="{{ url_for('crear') }}">Crear tu aventura</a>
+    <a class="" href="{{ url_for('privacidad') }}">Protección de datos</a>
+  </footer>
+</nav>
+
