@@ -706,6 +706,9 @@ Contenidos que deben aparecer:
 
 {chapter_outline}
 
+Datos que se deben aparecer en la historia:
+{data_bank}
+
 """
 
     if previous_chapter:
