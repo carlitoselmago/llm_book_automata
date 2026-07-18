@@ -803,6 +803,62 @@ def _strip_leading_chapter_label(chunks):
     yield from it
 
 
+# Streaming loop-breaker. A small local model sometimes falls into a groove and
+# reproduces a paragraph it already wrote, again and again, until it hits the
+# token limit. repeat_penalty/frequency_penalty (WRITING_PARAMS) curb short
+# loops but not paragraph-scale ones, and this box ignores the window/DRY
+# samplers that would (measured: no effect, same as a nonsense param). So we
+# watch the prose as it streams and end the chapter the moment a substantial
+# recent span turns out to repeat text from earlier in the same chapter.
+
+# Chars of recent output that must reappear earlier to count as a loop. Long
+# enough that ordinary repetition (a name, a refrain, a dialogue tag) never
+# trips it — ~27 words verbatim don't recur by chance in prose — yet short
+# enough to catch a looping paragraph a sentence or two after it starts.
+_LOOP_WINDOW = 160
+# Don't re-scan on every token; once per this many new chars is plenty and
+# keeps the substring search off the hot path.
+_LOOP_CHECK_STRIDE = 40
+
+
+def _norm_for_loop(text: str) -> str:
+    # Match case- and whitespace-insensitively, so a loop that differs only in
+    # spacing or capitalisation is still caught: content is the signal, not layout.
+    return re.sub(r'\s+', ' ', text).lower()
+
+
+def _break_on_repetition(chunks):
+    """Stream `chunks`, cutting off if the prose starts repeating itself.
+
+    Passes text through unchanged until the most recent _LOOP_WINDOW characters
+    are found to have already occurred earlier in the same chapter — the
+    signature of a stuck model — then stops pulling from it and ends the chapter.
+    """
+    it = iter(chunks)
+    norm = ''            # normalized full text so far, for the repeat check
+    since_check = 0
+    try:
+        for chunk in it:
+            yield chunk
+            norm += _norm_for_loop(chunk)
+            since_check += len(chunk)
+            if since_check < _LOOP_CHECK_STRIDE or len(norm) < 2 * _LOOP_WINDOW:
+                continue
+            since_check = 0
+            tail = norm[-_LOOP_WINDOW:]
+            # Look for the tail only in the text that ends before it begins, so
+            # it can never match itself — a hit there is a genuine earlier repeat.
+            if tail in norm[:-_LOOP_WINDOW]:
+                break
+    finally:
+        # Breaking out abandons the model mid-generation; close the underlying
+        # stream promptly so the HTTP connection to the box is released now
+        # rather than at the next garbage collection.
+        close = getattr(it, 'close', None)
+        if close:
+            close()
+
+
 def iter_chapter(chapter_outline: str, index: int, previous_chapter: str,
                  user_name: str):
     """Yield the chapter as text: a markdown heading, then streamed prose.
@@ -811,8 +867,9 @@ def iter_chapter(chapter_outline: str, index: int, previous_chapter: str,
     that keeps the prompt bounded no matter how long the book runs.
     """
     yield f"# Capítulo {index}:\n\n"
-    yield from _strip_leading_chapter_label(stream_chat(
-        _chapter_prompt(chapter_outline, index, previous_chapter, user_name)))
+    prose = stream_chat(
+        _chapter_prompt(chapter_outline, index, previous_chapter, user_name))
+    yield from _break_on_repetition(_strip_leading_chapter_label(prose))
 
 
 # ---------------------------------------------------------------------------
