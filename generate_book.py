@@ -683,7 +683,7 @@ def generate_cover_art(prompt: str, dest_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 def _chapter_prompt(chapter_outline: str, index: int, previous_chapter: str,
-                    user_name: str) -> str:
+                    user_name: str,data_bank: str) -> str:
     prompt = f"""
 
 	Tarea
@@ -693,18 +693,22 @@ Eres un escritor de fanfiction y novelista. Escribe el siguiente capítulo de un
 IMPORTANTE: Escribe todo el texto en español (castellano). No escribas ninguna frase en inglés, salvo títulos de vídeos, libros o nombres propios cuando aparezcan como referencias.
 
 Voz y tono (mantener SIEMPRE, en todos los capítulos):
-Irónico, mordaz, con humor seco ante lo absurdo. El choque entre el mundo real del protagonista (marcas, hábitos, búsquedas, obsesiones muy concretas) y el mundo mágico debe sentirse forzado a propósito, casi como si la trama se rompiera un poco para encajar esos detalles. Nunca suavices ni normalices esas intrusiones — cuanto más incómodo o ridículo resulte que la historia "sepa tanto" del protagonista, mejor. Incluye escenas de romance bisexual, tanto con chicos como con chicas, intimidad, emociones fuertes, violencia, pasión o conflicto. Inspírate en fan fictions homoeróticos de harry potter
+Inspirado en el fanfiction homoerótico de Harry Potter. El choque entre el mundo real del protagonista (hábitos, búsquedas, obsesiones muy concretas) y el mundo mágico debe sentirse forzado a propósito, con narrativa onírica como un sueño. Incluye escenas de romance bisexual, tanto con chicos como con chicas, intimidad , emociones fuertes, violencia, pasión o conflicto.
 
 Instrucciones
 Escribe únicamente el capítulo, sin explicaciones ni resúmenes previos.
 El protagonista es siempre {user_name}
 Estilo: novela, no resumen. Prosa rica, fluida e inmersiva. Mucho diálogo.
-Incluye conflicto, tensión narrativa, emociones fuertes y momentos de humor o vergüenza ajena y siempre con contenido romántico ni íntimo.
+Incluye conflicto, tensión sexual, pasión, escenas de intimidad, emociones fuertes, violencia y momentos de vergüenza ajena.
 Los cuatro elementos de intrusión de datos (setting, diálogo, conflicto, y el que corresponda) deben aparecer de forma literal y reconocible, no diluidos ni generalizados.
 
 Contenidos que deben aparecer:
 
 {chapter_outline}
+
+Datos relevantes sobre el usuario:
+
+{data_bank}
 
 """
 
@@ -860,7 +864,7 @@ def _break_on_repetition(chunks):
 
 
 def iter_chapter(chapter_outline: str, index: int, previous_chapter: str,
-                 user_name: str):
+                 user_name: str, data_bank: str):
     """Yield the chapter as text: a markdown heading, then streamed prose.
 
     Only the previous chapter is passed for continuity, not the book so far —
@@ -868,7 +872,7 @@ def iter_chapter(chapter_outline: str, index: int, previous_chapter: str,
     """
     yield f"# Capítulo {index}:\n\n"
     prose = stream_chat(
-        _chapter_prompt(chapter_outline, index, previous_chapter, user_name))
+        _chapter_prompt(chapter_outline, index, previous_chapter, user_name,data_bank))
     yield from _break_on_repetition(_strip_leading_chapter_label(prose))
 
 
@@ -985,7 +989,7 @@ def iter_book_events(source):
             'label': f'Escribiendo capítulo {i} de {total}',
         }
         chapter_text = ''
-        for delta in iter_chapter(chapter_outline, i, previous_chapter, user_name):
+        for delta in iter_chapter(chapter_outline, i, previous_chapter, user_name,data_bank):
             chapter_text += delta
             yield {'type': 'content', 'text': delta}
         # Guarantee separation between chapters.
