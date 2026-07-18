@@ -9,7 +9,7 @@
     </ol>
   </nav>
 
-
+<div class="page">
   <!-- Step 1: upload -->
   <section id="section-step-1" class="{{ 'active' if step == 1 else '' }}">
     <h2>Paso 1: Sube tu copia de Google</h2>
@@ -54,17 +54,19 @@
 
     <button type="button" id="generate-btn">Generar libro</button>
   </section>
-
+</div>
 
   <!-- Step 3: streams the LLM output live, like a shared doc.
        The user never types here — only the system writes. -->
   <section id="section-step-3" class="{{ 'active' if step == 3 else '' }}">
+    <div class="page">
     <h2>Escribiendo tu libro...</h2>
     <!-- Shown while the outline is being planned and between chapters, so the
          page never looks frozen before prose starts arriving. -->
     <div id="book-progress" style="display:none; margin-bottom: 1em;">
       <p id="book-progress-label"></p>
       <progress id="book-progress-bar" style="width: 100%; height: 1.2em;"></progress>
+    </div>
     </div>
     <div id="book-writer">
       <nav id="book-toc">
