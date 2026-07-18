@@ -556,7 +556,7 @@ only, the one that best identifies this person.
 Give me the name of the object only, no explanations.
 
 """
-
+""""""
 sd_prompt = "Harry Potter and "+chat(prompt, model="ibm/granite-4-h-tiny").strip().strip('"')
 print(f'prompt de portada: {sd_prompt}')
 
@@ -578,3 +578,4 @@ pdf_path = book_builder.build_pdf(user_name, '\n\n'.join(capitulos), cover_path,
 print(f'pdf guardado: {pdf_path}  (portada: {cover_path})')
 print("--- %s seconds ---" % (time.time() - start_time))
 print("")
+""""""

@@ -60,7 +60,7 @@ SD_BASE_URL = os.environ.get('SD_BASE_URL', 'http://192.168.100.138:8000')
 # follows a spec; the prose wants a writer model that won't refuse the brief.
 # An unknown model id is NOT an error in LM Studio — it quietly answers with
 # whatever is loaded — so a typo here degrades the book silently.
-PLANNING_MODEL = os.environ.get('PLANNING_MODEL', 'ibm/granite-4-h-tiny')
+PLANNING_MODEL = os.environ.get('PLANNING_MODEL', 'dirty-muse-writer-v01-uncensored-erotica-nsfw-i1')
 WRITING_MODEL = os.environ.get(
     'WRITING_MODEL', 'dirty-muse-writer-v01-uncensored-erotica-nsfw-i1')
 
