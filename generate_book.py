@@ -706,10 +706,6 @@ Contenidos que deben aparecer:
 
 {chapter_outline}
 
-Datos relevantes sobre el usuario:
-
-{data_bank}
-
 """
 
     if previous_chapter:
